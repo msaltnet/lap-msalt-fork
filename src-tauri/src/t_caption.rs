@@ -8,6 +8,22 @@ use std::{net::IpAddr, time::Duration};
 const MAX_CAPTION_CHARS: usize = 1000;
 const MAX_PROVIDER_RESPONSE_BYTES: usize = 1024 * 1024;
 
+pub fn literal_search_condition(search_term: &str) -> Option<(String, Vec<String>)> {
+    if search_term.is_empty() {
+        return None;
+    }
+
+    let condition = "(a.name LIKE ? COLLATE NOCASE
+        OR a.comments LIKE ? COLLATE NOCASE
+        OR EXISTS (
+            SELECT 1 FROM ai_captions ac
+            WHERE ac.file_id = a.id AND ac.caption LIKE ? COLLATE NOCASE
+        ))"
+    .to_string();
+    let pattern = format!("%{search_term}%");
+    Some((condition, vec![pattern; 3]))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AiCaption {
@@ -292,7 +308,11 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "PRAGMA foreign_keys = ON;
-             CREATE TABLE afiles (id INTEGER PRIMARY KEY);
+             CREATE TABLE afiles (
+                 id INTEGER PRIMARY KEY,
+                 name TEXT,
+                 comments TEXT
+             );
              CREATE TABLE ai_captions (
                  file_id INTEGER PRIMARY KEY,
                  caption TEXT NOT NULL,
@@ -392,6 +412,23 @@ mod tests {
             body["messages"][0]["content"][1]["image_url"]["url"],
             "data:image/jpeg;base64,YWJj"
         );
+    }
+
+    #[test]
+    fn literal_search_uses_a_correlated_caption_subquery() {
+        let (condition, values) = literal_search_condition("window cat").unwrap();
+        assert!(condition.contains("EXISTS"));
+        assert!(condition.contains("FROM ai_captions"));
+        assert!(!condition.contains("JOIN ai_captions"));
+        assert_eq!(values, vec!["%window cat%"; 3]);
+
+        let conn = fixture();
+        upsert(&conn, &caption("A window cat watches the street.")).unwrap();
+        let query = format!("SELECT a.id FROM afiles a WHERE {condition}");
+        let file_id: i64 = conn
+            .query_row(&query, rusqlite::params_from_iter(values), |row| row.get(0))
+            .unwrap();
+        assert_eq!(file_id, 7);
     }
 
     #[tokio::test]

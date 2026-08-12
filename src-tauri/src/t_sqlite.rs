@@ -4000,11 +4000,13 @@ impl AFile {
             vec![Self::live_photo_companion_exclusion_condition().to_string()];
         let mut sql_params: Vec<Box<dyn ToSql>> = Vec::new();
 
-        if !params.search_file_name.is_empty() {
-            conditions.push("(a.name LIKE ? COLLATE NOCASE OR a.comments LIKE ? COLLATE NOCASE)".to_string());
-            let pattern = format!("%{}%", params.search_file_name);
-            sql_params.push(Box::new(pattern.clone()));
-            sql_params.push(Box::new(pattern));
+        if let Some((condition, values)) =
+            lap_core::t_caption::literal_search_condition(&params.search_file_name)
+        {
+            conditions.push(condition);
+            for value in values {
+                sql_params.push(Box::new(value));
+            }
         }
 
         if let Some(condition) = Self::build_file_type_condition(params.search_file_type) {
