@@ -590,6 +590,8 @@
       "open_video_in_app": "Abrir video en {app}...",
       "open_selected_images_in_app": "Abrir fotos en {app}...",
       "compare_selected_images": "Comparar",
+      "generate_ai_caption": "Generar descripción con IA",
+      "generate_ai_captions": "Generar descripciones con IA",
       "open_selected_videos_in_app": "Abrir videos en {app}...",
       "open_in_app": "Abrir en app externa...",
       "find_similar_images": "Buscar fotos similares",
@@ -656,6 +658,18 @@
     "reset": "Restablecer",
     "cancel": "Cancelar",
     "close": "Cerrar",
+    "caption_batch": {
+      "title": "Generar descripciones con IA",
+      "progress": "{current} de {total}",
+      "succeeded": "Generadas",
+      "skipped": "Omitidas",
+      "failed": "Fallidas",
+      "cancel": "Cancelar",
+      "cancelling": "Se cancelará después de la foto actual...",
+      "close": "Cerrar",
+      "completed": "{succeeded} generadas, {skipped} omitidas, {failed} fallidas.",
+      "cancelled": "Cancelado: {succeeded} generadas, {skipped} omitidas, {failed} fallidas."
+    },
     "unsaved_changes": {
       "title": "Cambios sin guardar",
       "message": "Tienes cambios sin guardar. ¿Quieres guardarlos?"

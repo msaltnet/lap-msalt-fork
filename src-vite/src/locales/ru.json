@@ -590,6 +590,8 @@
       "open_video_in_app": "Открыть видео в {app}...",
       "open_selected_images_in_app": "Открыть фотографии в {app}...",
       "compare_selected_images": "Сравнить",
+      "generate_ai_caption": "Создать ИИ-описание",
+      "generate_ai_captions": "Создать ИИ-описания",
       "open_selected_videos_in_app": "Открыть видео в {app}...",
       "open_in_app": "Открыть во внешнем приложении...",
       "find_similar_images": "Найти похожие фотографии",
@@ -656,6 +658,18 @@
     "reset": "Сброс",
     "cancel": "Отмена",
     "close": "Закрыть",
+    "caption_batch": {
+      "title": "Создать ИИ-описания",
+      "progress": "{current} из {total}",
+      "succeeded": "Создано",
+      "skipped": "Пропущено",
+      "failed": "Ошибки",
+      "cancel": "Отмена",
+      "cancelling": "Отмена после текущей фотографии...",
+      "close": "Закрыть",
+      "completed": "Создано: {succeeded}, пропущено: {skipped}, ошибок: {failed}.",
+      "cancelled": "Отменено. Создано: {succeeded}, пропущено: {skipped}, ошибок: {failed}."
+    },
     "unsaved_changes": {
       "title": "Несохранённые изменения",
       "message": "Есть несохранённые изменения. Сохранить их?"

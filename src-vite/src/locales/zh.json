@@ -590,6 +590,8 @@
       "open_video_in_app": "在 {app} 中打开视频...",
       "open_selected_images_in_app": "在 {app} 中打开照片...",
       "compare_selected_images": "对比",
+      "generate_ai_caption": "生成 AI 图片描述",
+      "generate_ai_captions": "批量生成 AI 图片描述",
       "open_selected_videos_in_app": "在 {app} 中打开视频...",
       "open_in_app": "在外部应用中打开...",
       "find_similar_images": "查找相似照片",
@@ -656,6 +658,18 @@
     "reset": "重置",
     "cancel": "取消",
     "close": "关闭",
+    "caption_batch": {
+      "title": "批量生成 AI 图片描述",
+      "progress": "{current}/{total}",
+      "succeeded": "已生成",
+      "skipped": "已跳过",
+      "failed": "失败",
+      "cancel": "取消",
+      "cancelling": "将在当前照片处理完成后取消...",
+      "close": "关闭",
+      "completed": "已生成 {succeeded} 个，跳过 {skipped} 个，失败 {failed} 个。",
+      "cancelled": "已取消：生成 {succeeded} 个，跳过 {skipped} 个，失败 {failed} 个。"
+    },
     "unsaved_changes": {
       "title": "未保存的更改",
       "message": "您有未保存的更改。确定要保存这些更改吗？"

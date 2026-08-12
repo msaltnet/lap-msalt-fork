@@ -590,6 +590,8 @@
       "open_video_in_app": "Video in {app} öffnen...",
       "open_selected_images_in_app": "Fotos in {app} öffnen...",
       "compare_selected_images": "Vergleichen",
+      "generate_ai_caption": "KI-Bildbeschreibung erstellen",
+      "generate_ai_captions": "KI-Bildbeschreibungen erstellen",
       "open_selected_videos_in_app": "Videos in {app} öffnen...",
       "open_in_app": "In externer App öffnen...",
       "find_similar_images": "Ähnliche Fotos finden",
@@ -656,6 +658,18 @@
     "reset": "Zurücksetzen",
     "cancel": "Abbrechen",
     "close": "Schließen",
+    "caption_batch": {
+      "title": "KI-Bildbeschreibungen erstellen",
+      "progress": "{current} von {total}",
+      "succeeded": "Erstellt",
+      "skipped": "Übersprungen",
+      "failed": "Fehlgeschlagen",
+      "cancel": "Abbrechen",
+      "cancelling": "Abbruch nach dem aktuellen Foto...",
+      "close": "Schließen",
+      "completed": "{succeeded} erstellt, {skipped} übersprungen, {failed} fehlgeschlagen.",
+      "cancelled": "Abgebrochen: {succeeded} erstellt, {skipped} übersprungen, {failed} fehlgeschlagen."
+    },
     "unsaved_changes": {
       "title": "Nicht gespeicherte Änderungen",
       "message": "Sie haben nicht gespeicherte Änderungen. Möchten Sie diese speichern?"

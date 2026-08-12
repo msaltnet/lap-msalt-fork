@@ -590,6 +590,8 @@
       "open_video_in_app": "Ouvrir la vidéo dans {app}...",
       "open_selected_images_in_app": "Ouvrir les photos dans {app}...",
       "compare_selected_images": "Comparer",
+      "generate_ai_caption": "Générer une légende par IA",
+      "generate_ai_captions": "Générer des légendes par IA",
       "open_selected_videos_in_app": "Ouvrir les vidéos dans {app}...",
       "open_in_app": "Ouvrir dans une app externe...",
       "find_similar_images": "Trouver des photos similaires",
@@ -656,6 +658,18 @@
     "reset": "Réinitialiser",
     "cancel": "Annuler",
     "close": "Fermer",
+    "caption_batch": {
+      "title": "Générer des légendes par IA",
+      "progress": "{current} sur {total}",
+      "succeeded": "Générées",
+      "skipped": "Ignorées",
+      "failed": "Échecs",
+      "cancel": "Annuler",
+      "cancelling": "Annulation après la photo en cours...",
+      "close": "Fermer",
+      "completed": "{succeeded} générées, {skipped} ignorées, {failed} échecs.",
+      "cancelled": "Annulé : {succeeded} générées, {skipped} ignorées, {failed} échecs."
+    },
     "unsaved_changes": {
       "title": "Modifications non enregistrées",
       "message": "Vous avez des modifications non enregistrées. Voulez-vous les enregistrer ?"

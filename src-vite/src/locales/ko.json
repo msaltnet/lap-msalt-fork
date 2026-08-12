@@ -590,6 +590,8 @@
       "open_video_in_app": "{app}에서 동영상 열기...",
       "open_selected_images_in_app": "{app}에서 사진 열기...",
       "compare_selected_images": "비교",
+      "generate_ai_caption": "AI 캡션 생성",
+      "generate_ai_captions": "AI 캡션 일괄 생성",
       "open_selected_videos_in_app": "{app}에서 동영상 열기...",
       "open_in_app": "외부 앱에서 열기...",
       "find_similar_images": "유사 사진 찾기",
@@ -656,6 +658,18 @@
     "reset": "초기화",
     "cancel": "취소",
     "close": "닫기",
+    "caption_batch": {
+      "title": "AI 캡션 일괄 생성",
+      "progress": "{total}개 중 {current}개",
+      "succeeded": "생성",
+      "skipped": "건너뜀",
+      "failed": "실패",
+      "cancel": "취소",
+      "cancelling": "현재 사진을 처리한 후 취소합니다...",
+      "close": "닫기",
+      "completed": "생성 {succeeded}개, 건너뜀 {skipped}개, 실패 {failed}개.",
+      "cancelled": "취소됨: 생성 {succeeded}개, 건너뜀 {skipped}개, 실패 {failed}개."
+    },
     "unsaved_changes": {
       "title": "저장되지 않은 변경 사항",
       "message": "저장되지 않은 변경 사항이 있습니다. 저장하시겠습니까?"

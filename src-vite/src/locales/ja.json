@@ -590,6 +590,8 @@
       "open_video_in_app": "{app} で動画を開く...",
       "open_selected_images_in_app": "写真を {app} で開く...",
       "compare_selected_images": "比較",
+      "generate_ai_caption": "AIキャプションを生成",
+      "generate_ai_captions": "AIキャプションを一括生成",
       "open_selected_videos_in_app": "動画を {app} で開く...",
       "open_in_app": "外部アプリで開く...",
       "find_similar_images": "類似写真を検索",
@@ -656,6 +658,18 @@
     "reset": "リセット",
     "cancel": "キャンセル",
     "close": "閉じる",
+    "caption_batch": {
+      "title": "AIキャプションを一括生成",
+      "progress": "{total}件中{current}件",
+      "succeeded": "生成済み",
+      "skipped": "スキップ",
+      "failed": "失敗",
+      "cancel": "キャンセル",
+      "cancelling": "現在の写真の処理後にキャンセルします...",
+      "close": "閉じる",
+      "completed": "生成 {succeeded}件、スキップ {skipped}件、失敗 {failed}件。",
+      "cancelled": "キャンセル済み：生成 {succeeded}件、スキップ {skipped}件、失敗 {failed}件。"
+    },
     "unsaved_changes": {
       "title": "未保存の変更",
       "message": "未保存の変更があります。保存しますか？"

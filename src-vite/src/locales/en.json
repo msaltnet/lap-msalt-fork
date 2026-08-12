@@ -590,6 +590,8 @@
       "open_video_in_app": "Open video in {app}...",
       "open_selected_images_in_app": "Open photos in {app}...",
       "compare_selected_images": "Compare",
+      "generate_ai_caption": "Generate AI caption",
+      "generate_ai_captions": "Generate AI captions",
       "open_selected_videos_in_app": "Open videos in {app}...",
       "open_in_app": "Open in external app...",
       "find_similar_images": "Find similar photos",
@@ -656,6 +658,18 @@
     "reset": "Reset",
     "cancel": "Cancel",
     "close": "Close",
+    "caption_batch": {
+      "title": "Generate AI captions",
+      "progress": "{current} of {total}",
+      "succeeded": "Generated",
+      "skipped": "Skipped",
+      "failed": "Failed",
+      "cancel": "Cancel",
+      "cancelling": "Cancelling after the current photo...",
+      "close": "Close",
+      "completed": "{succeeded} generated, {skipped} skipped, {failed} failed.",
+      "cancelled": "Cancelled: {succeeded} generated, {skipped} skipped, {failed} failed."
+    },
     "unsaved_changes": {
       "title": "Unsaved changes",
       "message": "You have unsaved changes. Do you want to save them?"
