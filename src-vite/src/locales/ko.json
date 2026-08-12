@@ -1411,6 +1411,17 @@
       "restore_success": "복원 완료. {count}개 라이브러리 복원됨: {names}",
       "restore_note": "이름이 충돌하는 라이브러리는 이름이 변경되며 기존 데이터는 덮어쓰지 않습니다."
     },
+    "ai_caption": {
+      "title": "AI 캡션",
+      "enable": "로컬 AI 캡션 활성화",
+      "enable_hint": "이 컴퓨터에서 실행되는 비전 모델로 사진 설명을 생성합니다.",
+      "endpoint": "로컬 API 엔드포인트",
+      "model": "비전 모델",
+      "privacy_hint": "localhost와 루프백 주소만 허용됩니다. Lap은 모델을 설치하거나 실행하지 않습니다.",
+      "test_connection": "연결 테스트",
+      "testing": "테스트 중...",
+      "connection_success": "로컬 AI 캡션 모델에 연결되었습니다."
+    },
     "face_recognition": {
       "title": "인물 검색",
       "enable": "얼굴 인식 활성화",

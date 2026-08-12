@@ -1411,6 +1411,17 @@
       "restore_success": "Restore completed. {count} libraries restored: {names}",
       "restore_note": "Libraries with conflicting names will be renamed, and existing data will not be overwritten."
     },
+    "ai_caption": {
+      "title": "AI captions",
+      "enable": "Enable local AI captions",
+      "enable_hint": "Generate captions with a vision model running on this computer.",
+      "endpoint": "Local API endpoint",
+      "model": "Vision model",
+      "privacy_hint": "Only localhost and loopback addresses are accepted. Lap does not install or start the model.",
+      "test_connection": "Test connection",
+      "testing": "Testing...",
+      "connection_success": "Connected to the local AI caption model."
+    },
     "face_recognition": {
       "title": "People search",
       "enable": "Enable face recognition",

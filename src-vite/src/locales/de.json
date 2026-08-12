@@ -1411,6 +1411,17 @@
       "restore_success": "Wiederherstellung abgeschlossen. {count} Bibliotheken wiederhergestellt: {names}",
       "restore_note": "Bibliotheken mit Namenskonflikten werden umbenannt, vorhandene Daten werden nicht überschrieben."
     },
+    "ai_caption": {
+      "title": "KI-Bildbeschreibungen",
+      "enable": "Lokale KI-Bildbeschreibungen aktivieren",
+      "enable_hint": "Erstellt Bildbeschreibungen mit einem Vision-Modell, das auf diesem Computer läuft.",
+      "endpoint": "Lokaler API-Endpunkt",
+      "model": "Vision-Modell",
+      "privacy_hint": "Nur localhost und Loopback-Adressen werden akzeptiert. Lap installiert oder startet das Modell nicht.",
+      "test_connection": "Verbindung testen",
+      "testing": "Verbindung wird getestet...",
+      "connection_success": "Mit dem lokalen KI-Modell für Bildbeschreibungen verbunden."
+    },
     "face_recognition": {
       "title": "Personensuche",
       "enable": "Gesichtserkennung aktivieren",

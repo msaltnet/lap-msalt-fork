@@ -1411,6 +1411,17 @@
       "restore_success": "Restauração concluída. {count} bibliotecas restauradas: {names}",
       "restore_note": "Bibliotecas com nomes conflitantes serão renomeadas e os dados existentes não serão sobrescritos."
     },
+    "ai_caption": {
+      "title": "Legendas por IA",
+      "enable": "Ativar legendas locais por IA",
+      "enable_hint": "Gere legendas com um modelo de visão em execução neste computador.",
+      "endpoint": "Endpoint da API local",
+      "model": "Modelo de visão",
+      "privacy_hint": "Apenas localhost e endereços de loopback são aceitos. O Lap não instala nem inicia o modelo.",
+      "test_connection": "Testar conexão",
+      "testing": "Testando...",
+      "connection_success": "Conectado ao modelo local de legendas por IA."
+    },
     "face_recognition": {
       "title": "Pesquisa de pessoas",
       "enable": "Ativar reconhecimento facial",

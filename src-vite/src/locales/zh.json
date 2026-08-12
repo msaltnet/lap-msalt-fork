@@ -1411,6 +1411,17 @@
       "restore_success": "恢复完成。已恢复 {count} 个资料库：{names}",
       "restore_note": "名称冲突的资料库将被重命名，现有数据不会被覆盖。"
     },
+    "ai_caption": {
+      "title": "AI 图片描述",
+      "enable": "启用本地 AI 图片描述",
+      "enable_hint": "使用在此电脑上运行的视觉模型生成图片描述。",
+      "endpoint": "本地 API 端点",
+      "model": "视觉模型",
+      "privacy_hint": "仅接受 localhost 和环回地址。Lap 不会安装或启动模型。",
+      "test_connection": "测试连接",
+      "testing": "正在测试...",
+      "connection_success": "已连接到本地 AI 图片描述模型。"
+    },
     "face_recognition": {
       "title": "人物搜索",
       "enable": "启用人脸识别",

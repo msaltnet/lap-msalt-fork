@@ -1411,6 +1411,17 @@
       "restore_success": "復元完了。{count} 個のライブラリを復元：{names}",
       "restore_note": "名前が重複するライブラリは名前が変更され、既存のデータは上書きされません。"
     },
+    "ai_caption": {
+      "title": "AIキャプション",
+      "enable": "ローカルAIキャプションを有効にする",
+      "enable_hint": "このコンピューターで動作する画像認識モデルを使ってキャプションを生成します。",
+      "endpoint": "ローカルAPIエンドポイント",
+      "model": "画像認識モデル",
+      "privacy_hint": "localhostとループバックアドレスのみ使用できます。Lapはモデルのインストールや起動を行いません。",
+      "test_connection": "接続をテスト",
+      "testing": "テスト中...",
+      "connection_success": "ローカルAIキャプションモデルに接続しました。"
+    },
     "face_recognition": {
       "title": "人物検索",
       "enable": "顔認識を有効化",
