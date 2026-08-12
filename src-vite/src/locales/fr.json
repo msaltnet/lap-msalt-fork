@@ -992,7 +992,20 @@
     "geo_location": "Lieu",
     "tags": "Tags",
     "comment": "Commentaire",
-    "capture_settings": "Paramètres prise"
+    "capture_settings": "Paramètres prise",
+    "ai_caption": {
+      "title": "Légende par IA",
+      "generate": "Générer",
+      "regenerate": "Régénérer",
+      "delete": "Supprimer",
+      "generating": "Génération...",
+      "empty": "Aucune légende par IA n’a été générée.",
+      "outdated": "Le fichier source a été modifié après la génération de cette légende.",
+      "outdated_badge": "Obsolète",
+      "generated": "Légende par IA générée.",
+      "deleted": "Légende par IA supprimée.",
+      "metadata": "{model} · langue demandée : {language} · {time}"
+    }
   },
   "map": {
     "show_map": "Voir carte",

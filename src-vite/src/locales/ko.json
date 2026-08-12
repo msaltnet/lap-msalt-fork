@@ -992,7 +992,20 @@
     "geo_location": "위치",
     "tags": "태그",
     "comment": "메모",
-    "capture_settings": "촬영 설정"
+    "capture_settings": "촬영 설정",
+    "ai_caption": {
+      "title": "AI 캡션",
+      "generate": "생성",
+      "regenerate": "다시 생성",
+      "delete": "삭제",
+      "generating": "생성 중...",
+      "empty": "생성된 AI 캡션이 없습니다.",
+      "outdated": "캡션을 생성한 후 원본 파일이 변경되었습니다.",
+      "outdated_badge": "오래됨",
+      "generated": "AI 캡션을 생성했습니다.",
+      "deleted": "AI 캡션을 삭제했습니다.",
+      "metadata": "{model} · 요청 언어 {language} · {time}"
+    }
   },
   "map": {
     "show_map": "지도 보기",

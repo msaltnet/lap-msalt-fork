@@ -992,7 +992,20 @@
     "geo_location": "地点",
     "tags": "标签",
     "comment": "备注",
-    "capture_settings": "拍摄设置"
+    "capture_settings": "拍摄设置",
+    "ai_caption": {
+      "title": "AI 图片描述",
+      "generate": "生成",
+      "regenerate": "重新生成",
+      "delete": "删除",
+      "generating": "正在生成...",
+      "empty": "尚未生成 AI 图片描述。",
+      "outdated": "生成此描述后，原始文件已发生更改。",
+      "outdated_badge": "已过期",
+      "generated": "AI 图片描述已生成。",
+      "deleted": "AI 图片描述已删除。",
+      "metadata": "{model} · 请求语言 {language} · {time}"
+    }
   },
   "map": {
     "show_map": "显示地图",

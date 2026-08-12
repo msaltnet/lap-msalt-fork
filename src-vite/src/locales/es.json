@@ -992,7 +992,20 @@
     "geo_location": "Ubicación",
     "tags": "Etiquetas",
     "comment": "Comentario",
-    "capture_settings": "Ajustes captura"
+    "capture_settings": "Ajustes captura",
+    "ai_caption": {
+      "title": "Descripción con IA",
+      "generate": "Generar",
+      "regenerate": "Volver a generar",
+      "delete": "Eliminar",
+      "generating": "Generando...",
+      "empty": "No se ha generado ninguna descripción con IA.",
+      "outdated": "El archivo original cambió después de generar esta descripción.",
+      "outdated_badge": "Desactualizada",
+      "generated": "Descripción con IA generada.",
+      "deleted": "Descripción con IA eliminada.",
+      "metadata": "{model} · idioma solicitado: {language} · {time}"
+    }
   },
   "map": {
     "show_map": "Ver mapa",

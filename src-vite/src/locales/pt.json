@@ -992,7 +992,20 @@
     "geo_location": "Local",
     "tags": "Tags",
     "comment": "Comentário",
-    "capture_settings": "Config. captura"
+    "capture_settings": "Config. captura",
+    "ai_caption": {
+      "title": "Legenda por IA",
+      "generate": "Gerar",
+      "regenerate": "Gerar novamente",
+      "delete": "Excluir",
+      "generating": "Gerando...",
+      "empty": "Nenhuma legenda por IA foi gerada.",
+      "outdated": "O arquivo original foi alterado após a geração desta legenda.",
+      "outdated_badge": "Desatualizada",
+      "generated": "Legenda por IA gerada.",
+      "deleted": "Legenda por IA excluída.",
+      "metadata": "{model} · idioma solicitado: {language} · {time}"
+    }
   },
   "map": {
     "show_map": "Mostrar mapa",

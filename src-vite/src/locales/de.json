@@ -992,7 +992,20 @@
     "geo_location": "Ort",
     "tags": "Tags",
     "comment": "Kommentar",
-    "capture_settings": "Aufnahmeeinst."
+    "capture_settings": "Aufnahmeeinst.",
+    "ai_caption": {
+      "title": "KI-Bildbeschreibung",
+      "generate": "Erstellen",
+      "regenerate": "Neu erstellen",
+      "delete": "Löschen",
+      "generating": "Wird erstellt...",
+      "empty": "Es wurde noch keine KI-Bildbeschreibung erstellt.",
+      "outdated": "Die Quelldatei wurde nach dem Erstellen dieser Beschreibung geändert.",
+      "outdated_badge": "Veraltet",
+      "generated": "KI-Bildbeschreibung erstellt.",
+      "deleted": "KI-Bildbeschreibung gelöscht.",
+      "metadata": "{model} · angeforderte Sprache {language} · {time}"
+    }
   },
   "map": {
     "show_map": "Karte anzeigen",

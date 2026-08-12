@@ -992,7 +992,20 @@
     "geo_location": "位置",
     "tags": "タグ",
     "comment": "コメント",
-    "capture_settings": "撮影設定"
+    "capture_settings": "撮影設定",
+    "ai_caption": {
+      "title": "AIキャプション",
+      "generate": "生成",
+      "regenerate": "再生成",
+      "delete": "削除",
+      "generating": "生成中...",
+      "empty": "AIキャプションはまだ生成されていません。",
+      "outdated": "このキャプションの生成後に元のファイルが変更されました。",
+      "outdated_badge": "古い",
+      "generated": "AIキャプションを生成しました。",
+      "deleted": "AIキャプションを削除しました。",
+      "metadata": "{model} · 指定言語 {language} · {time}"
+    }
   },
   "map": {
     "show_map": "地図を表示",
