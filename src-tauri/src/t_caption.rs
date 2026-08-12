@@ -1,3 +1,4 @@
+use base64::Engine;
 use reqwest::{Url, redirect::Policy};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -98,6 +99,103 @@ fn build_caption_request(model: &str, language: &str, image_url: &str) -> Value 
                 { "type": "image_url", "image_url": { "url": image_url } }
             ]
         }]
+    })
+}
+
+async fn read_limited(mut response: reqwest::Response) -> Result<Vec<u8>, String> {
+    if response
+        .content_length()
+        .is_some_and(|size| size > MAX_PROVIDER_RESPONSE_BYTES as u64)
+    {
+        return Err("Local AI provider response is too large".to_string());
+    }
+
+    let mut data = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|error| error.to_string())? {
+        if data.len() + chunk.len() > MAX_PROVIDER_RESPONSE_BYTES {
+            return Err("Local AI provider response is too large".to_string());
+        }
+        data.extend_from_slice(&chunk);
+    }
+    Ok(data)
+}
+
+fn parse_provider_caption(data: &[u8]) -> Result<String, String> {
+    let value: Value = serde_json::from_slice(data)
+        .map_err(|_| "Local AI provider returned invalid JSON".to_string())?;
+    let content = value
+        .pointer("/choices/0/message/content")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "Local AI provider returned no caption".to_string())?;
+    normalize_caption(content)
+}
+
+async fn request_caption(
+    base: &str,
+    model: &str,
+    language: &str,
+    image_url: &str,
+) -> Result<String, String> {
+    let response = provider_client()?
+        .post(endpoint_url(base, "chat/completions")?)
+        .json(&build_caption_request(model, language, image_url))
+        .send()
+        .await
+        .map_err(|error| format!("Could not reach the local AI provider: {error}"))?;
+    if response.status().is_redirection() {
+        return Err("Local AI provider redirects are not allowed".to_string());
+    }
+
+    let status = response.status();
+    let data = read_limited(response).await?;
+    if !status.is_success() {
+        let detail = String::from_utf8_lossy(&data)
+            .chars()
+            .take(300)
+            .collect::<String>();
+        return Err(format!("Local AI provider returned {status}: {detail}"));
+    }
+    parse_provider_caption(&data)
+}
+
+fn image_mime(data: &[u8]) -> Result<&'static str, String> {
+    if data.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return Ok("image/jpeg");
+    }
+    if data.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
+        return Ok("image/png");
+    }
+    Err("Caption thumbnail is not JPEG or PNG".to_string())
+}
+
+pub async fn generate(
+    file_id: i64,
+    source_modified_at: Option<i64>,
+    endpoint: &str,
+    model: &str,
+    requested_language: &str,
+    image_data: &[u8],
+) -> Result<AiCaption, String> {
+    let model = model.trim();
+    if model.is_empty() {
+        return Err("AI caption model is required".to_string());
+    }
+    let language = match requested_language.trim() {
+        "" => "en",
+        value => value,
+    };
+    let mime = image_mime(image_data)?;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(image_data);
+    let image_url = format!("data:{mime};base64,{encoded}");
+    let caption = request_caption(endpoint, model, language, &image_url).await?;
+
+    Ok(AiCaption {
+        file_id,
+        caption,
+        requested_language: language.to_string(),
+        model: model.to_string(),
+        source_modified_at,
+        generated_at: chrono::Utc::now().timestamp(),
     })
 }
 
@@ -261,5 +359,85 @@ mod tests {
             body["messages"][0]["content"][1]["image_url"]["url"],
             "data:image/jpeg;base64,YWJj"
         );
+    }
+
+    #[tokio::test]
+    async fn calls_loopback_chat_completion_and_parses_caption() {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let mut request = vec![0_u8; 16 * 1024];
+            let read = stream.read(&mut request).await.unwrap();
+            let text = String::from_utf8_lossy(&request[..read]);
+            assert!(text.starts_with("POST /v1/chat/completions HTTP/1.1"));
+            let body = r#"{"choices":[{"message":{"content":"A cat sits beside a window."}}]}"#;
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+        });
+
+        let result = request_caption(
+            &format!("http://{address}/v1"),
+            "vision-model",
+            "en",
+            "data:image/jpeg;base64,YWJj",
+        )
+        .await
+        .unwrap();
+        assert_eq!(result, "A cat sits beside a window.");
+    }
+
+    #[tokio::test]
+    async fn refuses_provider_redirects() {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let mut request = [0_u8; 4096];
+            let _ = stream.read(&mut request).await.unwrap();
+            stream
+                .write_all(
+                    b"HTTP/1.1 302 Found\r\nLocation: http://example.com/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await
+                .unwrap();
+        });
+
+        assert!(
+            request_caption(
+                &format!("http://{address}/v1"),
+                "vision-model",
+                "en",
+                "data:image/jpeg;base64,YWJj",
+            )
+            .await
+            .unwrap_err()
+            .contains("redirect")
+        );
+    }
+
+    #[test]
+    fn detects_supported_thumbnail_mime_types() {
+        assert_eq!(image_mime(&[0xFF, 0xD8, 0xFF, 0xD9]).unwrap(), "image/jpeg");
+        assert_eq!(
+            image_mime(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]).unwrap(),
+            "image/png"
+        );
+        assert!(image_mime(b"unknown").is_err());
     }
 }
