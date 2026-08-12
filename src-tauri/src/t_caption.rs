@@ -3,7 +3,10 @@ use reqwest::{Url, redirect::Policy};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{net::IpAddr, time::Duration};
+use std::{
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    time::Duration,
+};
 
 const MAX_CAPTION_CHARS: usize = 1000;
 const MAX_PROVIDER_RESPONSE_BYTES: usize = 1024 * 1024;
@@ -72,10 +75,19 @@ fn endpoint_url(base: &str, route: &str) -> Result<Url, String> {
     Ok(url)
 }
 
+fn localhost_dns_targets() -> [SocketAddr; 2] {
+    [
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+        SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0),
+    ]
+}
+
 fn provider_client() -> Result<reqwest::Client, String> {
+    let localhost_targets = localhost_dns_targets();
     reqwest::Client::builder()
         .no_proxy()
         .redirect(Policy::none())
+        .resolve_to_addrs("localhost", &localhost_targets)
         .connect_timeout(Duration::from_secs(3))
         .timeout(Duration::from_secs(120))
         .build()
@@ -375,6 +387,15 @@ mod tests {
         ] {
             assert!(validate_base_url(rejected).is_err(), "{rejected}");
         }
+    }
+
+    #[test]
+    fn localhost_dns_targets_are_pinned_to_loopback() {
+        assert!(
+            localhost_dns_targets()
+                .iter()
+                .all(|address| address.ip().is_loopback())
+        );
     }
 
     #[test]
