@@ -1707,6 +1707,21 @@ export async function listenImageSearchModelDownloadProgress(callback) {
   return await listen('image_search_model_download_progress', callback);
 }
 
+export const testAiCaptionProvider = (endpoint, model) =>
+  invoke('test_ai_caption_provider', { endpoint, model });
+
+export const getAiCaption = (fileId) => invoke('get_ai_caption', { fileId });
+
+export const generateAiCaption = (fileId, settings, requestedLanguage) =>
+  invoke('generate_ai_caption', {
+    fileId,
+    endpoint: settings.endpoint,
+    model: settings.model,
+    requestedLanguage,
+  });
+
+export const deleteAiCaption = (fileId) => invoke('delete_ai_caption', { fileId });
+
 // generate embedding
 export async function generateEmbedding(fileId) {
   try {

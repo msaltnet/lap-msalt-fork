@@ -199,6 +199,39 @@ pub async fn generate(
     })
 }
 
+fn model_is_available(data: &[u8], model: &str) -> Result<bool, String> {
+    let value: Value = serde_json::from_slice(data)
+        .map_err(|_| "Local AI provider returned invalid model data".to_string())?;
+    Ok(value["data"]
+        .as_array()
+        .is_some_and(|models| models.iter().any(|item| item["id"].as_str() == Some(model))))
+}
+
+pub async fn test_provider(endpoint: &str, model: &str) -> Result<(), String> {
+    let model = model.trim();
+    if model.is_empty() {
+        return Err("AI caption model is required".to_string());
+    }
+    let response = provider_client()?
+        .get(endpoint_url(endpoint, "models")?)
+        .send()
+        .await
+        .map_err(|error| format!("Could not reach the local AI provider: {error}"))?;
+    if response.status().is_redirection() {
+        return Err("Local AI provider redirects are not allowed".to_string());
+    }
+
+    let status = response.status();
+    let data = read_limited(response).await?;
+    if !status.is_success() {
+        return Err(format!("Local AI provider returned {status}"));
+    }
+    if !model_is_available(&data, model)? {
+        return Err("Configured AI caption model was not found".to_string());
+    }
+    Ok(())
+}
+
 fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AiCaption> {
     Ok(AiCaption {
         file_id: row.get(0)?,
@@ -439,5 +472,12 @@ mod tests {
             "image/png"
         );
         assert!(image_mime(b"unknown").is_err());
+    }
+
+    #[test]
+    fn finds_configured_model_in_openai_models_response() {
+        let body = br#"{"data":[{"id":"gemma3:4b"},{"id":"qwen-vl"}]}"#;
+        assert!(model_is_available(body, "gemma3:4b").unwrap());
+        assert!(!model_is_available(body, "missing").unwrap());
     }
 }
