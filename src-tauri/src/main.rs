@@ -16,6 +16,7 @@ use tauri_plugin_aptabase::EventTracker;
 mod t_ai;
 mod t_ai_png;
 mod t_apple_sidecar;
+mod t_caption;
 mod t_cluster;
 mod t_cmds;
 mod t_common;
