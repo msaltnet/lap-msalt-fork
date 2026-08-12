@@ -8731,7 +8731,7 @@ fn create_db_internal() -> Result<(), String> {
     .map_err(|e| e.to_string())?;
 
     // Run schema migrations after base tables are ensured.
-    crate::t_migration::check_and_migrate(&conn)?;
+    lap_core::t_migration::check_and_migrate(&conn)?;
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_afiles_content_identifier ON afiles(content_identifier)",
         [],
