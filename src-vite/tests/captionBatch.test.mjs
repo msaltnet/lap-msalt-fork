@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { eligibleCaptionFiles, runCaptionBatch } from '../src/common/captionBatch.js';
+import {
+  confirmCaptionBatchStart,
+  eligibleCaptionFiles,
+  runCaptionBatch,
+} from '../src/common/captionBatch.js';
 
 test('eligibleCaptionFiles keeps images and RAW files only', () => {
   assert.deepEqual(
@@ -12,6 +16,34 @@ test('eligibleCaptionFiles keeps images and RAW files only', () => {
     ]).map(file => file.id),
     [1, 3],
   );
+});
+
+test('confirmCaptionBatchStart asks before a large batch and honours cancellation', async () => {
+  let requestedCount = 0;
+  const confirmed = await confirmCaptionBatchStart(
+    Array.from({ length: 1001 }),
+    async (count) => {
+      requestedCount = count;
+      return false;
+    },
+  );
+
+  assert.equal(confirmed, false);
+  assert.equal(requestedCount, 1001);
+});
+
+test('confirmCaptionBatchStart starts small batches without a prompt', async () => {
+  let promptCalls = 0;
+  const confirmed = await confirmCaptionBatchStart(
+    Array.from({ length: 1000 }),
+    async () => {
+      promptCalls += 1;
+      return false;
+    },
+  );
+
+  assert.equal(confirmed, true);
+  assert.equal(promptCalls, 0);
 });
 
 test('runCaptionBatch counts saved, skipped, and failed files', async () => {

@@ -1,7 +1,15 @@
+export const CAPTION_BATCH_CONFIRM_THRESHOLD = 1000;
+
 export const eligibleCaptionFiles = files =>
   (Array.isArray(files) ? files : []).filter(file =>
     [1, 3].includes(Number(file?.file_type)),
   );
+
+export async function confirmCaptionBatchStart(files, confirmLargeBatch) {
+  const count = Array.isArray(files) ? files.length : 0;
+  if (count <= CAPTION_BATCH_CONFIRM_THRESHOLD) return true;
+  return Boolean(await confirmLargeBatch(count));
+}
 
 export async function runCaptionBatch({
   files,

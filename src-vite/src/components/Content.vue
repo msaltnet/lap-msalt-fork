@@ -705,7 +705,11 @@ import ProgressBar from '@/components/ProgressBar.vue';
 import GridView  from '@/components/GridView.vue';
 import ContextMenu from '@/components/ContextMenu.vue';
 import { useFileMenuItems } from '@/common/fileMenu';
-import { eligibleCaptionFiles, runCaptionBatch } from '@/common/captionBatch';
+import {
+  confirmCaptionBatchStart,
+  eligibleCaptionFiles,
+  runCaptionBatch,
+} from '@/common/captionBatch';
 import Welcome from '@/components/Welcome.vue';
 import MediaViewer from '@/components/MediaViewer.vue';
 import MessageBox from '@/components/MessageBox.vue';
@@ -5735,6 +5739,7 @@ async function startCaptionBatch() {
 
   const files = eligibleCaptionFiles(sourceFiles);
   if (files.length === 0 || !config.settings.aiCaption?.enabled) return;
+  if (!await confirmCaptionBatchStart(files, confirmLargeBatch)) return;
 
   const settings = { ...config.settings.aiCaption };
   const requestedLanguage = String(locale.value || 'en');
