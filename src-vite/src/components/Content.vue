@@ -576,6 +576,14 @@
     @cancel="showAddToCollectionDialog = false"
   />
 
+  <CaptionBatchDialog
+    v-if="showCaptionBatchDialog"
+    :progress="captionBatchProgress"
+    :cancelling="captionBatchCancelling"
+    @cancel="cancelCaptionBatch"
+    @close="closeCaptionBatchDialog"
+  />
+
   <!-- comment -->
   <MessageBox
     v-if="showCommentMsgbox"
@@ -677,8 +685,8 @@ import { getAlbum, getAllAlbums, recountAlbum, getQueryCountAndSum, getQueryTime
          revealPath, getTagName, indexAlbum, listenIndexProgress, listenIndexFinished, setAlbumCover,
          updateFileInfo, importFile, importUrl, importFileBytes, getDragPayload, importClipboard, addFileToDb, checkFileExists, cancelIndexing as cancelIndexingApi, selectFolder, getFacesForFile, listenFaceIndexProgress,
          openFilesWithApp, getAppConfig, getIndexRecoveryInfo, clearIndexRecoveryInfo, setLastSelectedItemIndex,
-         dedupDeleteSelected, getQueryFilePosition, getFolderSearchExcluded,
-         listCollections, createCollection, addFilesToCollection, removeFilesFromCollection, getCollectionCountAndSum, getCollectionFiles, getCollectionGroupedQueryRows, getCollectionGroupFileIds, getCollectionQueryFileIds, fetchFolder, isDirectoryAccessible } from '@/common/api';
+         dedupDeleteSelected, getQueryFilePosition, getFolderSearchExcluded, getAiCaption, generateAiCaption,
+         listCollections, createCollection, addFilesToCollection, removeFilesFromCollection, getCollectionCountAndSum, getCollectionFiles, getCollectionGroupedQueryRows, getCollectionGroupFileIds, getCollectionQueryFileIds, fetchFolder, isDirectoryAccessible, addTagToFile } from '@/common/api';
 import { config, libConfig } from '@/common/config';
 import { getShortcutLabel, matchesShortcut, ShortcutActionId, ShortcutPlatform, VIEW_BACKGROUND_SHORTCUTS } from '@/common/shortcuts';
 import { getSmartTagById, SMART_TAG_SEARCH_THRESHOLD } from '@/common/smartTags';
@@ -697,6 +705,11 @@ import ProgressBar from '@/components/ProgressBar.vue';
 import GridView  from '@/components/GridView.vue';
 import ContextMenu from '@/components/ContextMenu.vue';
 import { useFileMenuItems } from '@/common/fileMenu';
+import {
+  confirmCaptionBatchStart,
+  eligibleCaptionFiles,
+  runCaptionBatch,
+} from '@/common/captionBatch';
 import Welcome from '@/components/Welcome.vue';
 import MediaViewer from '@/components/MediaViewer.vue';
 import MessageBox from '@/components/MessageBox.vue';
@@ -705,6 +718,7 @@ import MoveTo from '@/components/MoveTo.vue';
 import TButton from '@/components/TButton.vue';
 import TaggingDialog from '@/components/TaggingDialog.vue';
 import AddToCollectionDialog from '@/components/AddToCollectionDialog.vue';
+import CaptionBatchDialog from '@/components/CaptionBatchDialog.vue';
 import FileInfo from '@/components/FileInfo.vue';
 import Breadcrumb from '@/components/Breadcrumb.vue';
 import DedupPane from '@/components/DedupPane.vue';
@@ -967,6 +981,9 @@ const getMediaKind = (items: any[]): 'image' | 'video' | 'mixed' | 'empty' => {
   return 'empty';
 };
 const selectionMediaKind = computed(() => getMediaKind(selectedFiles.value));
+const selectionHasImages = computed(() => (
+  selectedFiles.value.some(file => [1, 3].includes(Number(file?.file_type)))
+));
 type ImageViewerSession =
   | { mode: 'normal' }
   | { mode: 'compare'; files: any[] };
@@ -1000,6 +1017,7 @@ const selectionMenuItems = useFileMenuItems(
     selectMode: ref(true),
     selectionMediaKind,
     selectionCount: selectedCount,
+    selectionHasImages,
   },
 );
 
@@ -1714,6 +1732,27 @@ let fileConflictResolver: ((result: { policy: FileConflictPolicy; applyAll: bool
 const showTrashMsgbox = ref(false);
 const showTrashFailedMsgbox = ref(false);
 const showExternalOpenWarningMsgbox = ref(false);
+type CaptionBatchProgress = {
+  total: number;
+  current: number;
+  succeeded: number;
+  skipped: number;
+  failed: number;
+  cancelled: boolean;
+};
+const emptyCaptionBatchProgress = (): CaptionBatchProgress => ({
+  total: 0,
+  current: 0,
+  succeeded: 0,
+  skipped: 0,
+  failed: 0,
+  cancelled: false,
+});
+const showCaptionBatchDialog = ref(false);
+const captionBatchProgress = ref<CaptionBatchProgress>(emptyCaptionBatchProgress());
+const captionBatchCancelling = ref(false);
+const captionBatchRunning = ref(false);
+let captionBatchCancelRequested = false;
 const pendingExternalOpen = ref<{ paths: string[]; appPath: string } | null>(null);
 const permanentDeleteChecked = ref(false);
 const deletePermanently = ref(false);
@@ -2724,6 +2763,32 @@ const currentCollectionId = ref<number | null>(null);
 const currentSearchFileIds = ref<number[]>([]);
 const dedupSmartFileIds = ref<number[] | null>(null);
 
+type SaveAsContext = {
+  folderId?: number;
+  collectionId?: number;
+  tagId?: number;
+};
+
+// Capture this when opening the editor: the user can navigate elsewhere before saving.
+// The editor window is reused, so contexts must remain tied to their source file.
+const imageEditorSaveAsContexts = new Map<number, SaveAsContext | null>();
+
+const getCurrentSaveAsContext = (file: any): SaveAsContext | null => {
+  const folderId = Number(file?.folder_id || 0);
+  const context: SaveAsContext = folderId > 0 ? { folderId } : {};
+  const collectionId = Number(currentCollectionId.value || 0);
+  if (currentQuerySource.value === 'collection' && collectionId > 0) {
+    return { ...context, collectionId };
+  }
+
+  const tagId = Number(currentQueryParams.value.tagId || 0);
+  if (currentQuerySource.value === 'query' && tagId > 0) {
+    return { ...context, tagId };
+  }
+
+  return Object.keys(context).length > 0 ? context : null;
+};
+
 const scanStreamRequestInFlight = ref(false);
 const scanStreamPullPending = ref(false);
 const scanStreamAlbumId = ref<number | null>(null);
@@ -3366,6 +3431,7 @@ function handleItemAction(payload: { action: string, index: number }) {
         forceSplitCount: files.length === 2 ? 2 : 4,
       });
     },
+    'generate-ai-captions': () => void startCaptionBatch(),
     'copy': () => void clickCopyImages(fileList.value[selectedItemIndex.value]),
     'rename': clickRename,
     'move-within-library': () => showMoveTo.value = true,
@@ -4628,8 +4694,11 @@ onMounted( async() => {
   });
 
   unlistenImageEditor = await listen('message-from-image-editor', async (event: any) => {
-    const { type, saveAsNew, filePath } = event.payload as any;
+    const { type, saveAsNew, filePath, sourceFileId } = event.payload as any;
+    const sourceId = Number(sourceFileId || 0);
     if (type === 'success') {
+      const saveAsContext = sourceId > 0 ? imageEditorSaveAsContexts.get(sourceId) || null : null;
+      if (sourceId > 0) imageEditorSaveAsContexts.delete(sourceId);
       try {
         const editorWindow = await WebviewWindow.getByLabel('imageeditor');
         if (editorWindow) {
@@ -4643,11 +4712,12 @@ onMounted( async() => {
         if (!saveAsNew && filePath) {
           uiStore.updateFileVersion(filePath);
         }
-        await onFileSaved(true, { saveAsNew, filePath });
+        await onFileSaved(true, { saveAsNew, filePath, saveAsContext });
       } catch (error) {
         console.error('Failed handling ImageEditor save success:', error);
       }
     } else if (type === 'failed') {
+      if (sourceId > 0) imageEditorSaveAsContexts.delete(sourceId);
       await onFileSaved(false);
     }
   });
@@ -5657,6 +5727,78 @@ async function getActionableSelectedItemsForAction() {
     return null;
   }
   return getActionableSelectedItems();
+}
+
+async function startCaptionBatch() {
+  if (captionBatchRunning.value || showCaptionBatchDialog.value) return;
+
+  const sourceFiles = selectMode.value
+    ? await getActionableSelectedItemsForAction()
+    : [fileList.value[selectedItemIndex.value]];
+  if (!sourceFiles) return;
+
+  const files = eligibleCaptionFiles(sourceFiles);
+  if (files.length === 0 || !config.settings.aiCaption?.enabled) return;
+  if (!await confirmCaptionBatchStart(files, confirmLargeBatch)) return;
+
+  const settings = { ...config.settings.aiCaption };
+  const requestedLanguage = String(locale.value || 'en');
+  captionBatchCancelRequested = false;
+  captionBatchCancelling.value = false;
+  captionBatchRunning.value = true;
+  captionBatchProgress.value = {
+    ...emptyCaptionBatchProgress(),
+    total: files.length,
+  };
+  showCaptionBatchDialog.value = true;
+
+  try {
+    const result = await runCaptionBatch({
+      files,
+      isCancelled: () => captionBatchCancelRequested,
+      process: async (file: any) => {
+        const fileId = Number(file.id);
+        const existing = await getAiCaption(fileId);
+        if (existing) return null;
+
+        const caption = await generateAiCaption(fileId, settings, requestedLanguage);
+        await tauriEmit('ai-caption-updated', { fileId, caption });
+        return caption;
+      },
+      onProgress: (progress: CaptionBatchProgress) => {
+        captionBatchProgress.value = progress;
+      },
+    });
+    captionBatchProgress.value = result;
+
+    const messageParams = {
+      succeeded: result.succeeded.toLocaleString(),
+      skipped: result.skipped.toLocaleString(),
+      failed: result.failed.toLocaleString(),
+    };
+    if (result.cancelled) {
+      toast.warning(t('msgbox.caption_batch.cancelled', messageParams));
+    } else {
+      toast.success(t('msgbox.caption_batch.completed', messageParams));
+    }
+  } finally {
+    captionBatchRunning.value = false;
+    captionBatchCancelling.value = false;
+  }
+}
+
+function cancelCaptionBatch() {
+  if (!captionBatchRunning.value || captionBatchCancelRequested) return;
+  captionBatchCancelRequested = true;
+  captionBatchCancelling.value = true;
+}
+
+function closeCaptionBatchDialog() {
+  if (captionBatchRunning.value) {
+    cancelCaptionBatch();
+    return;
+  }
+  showCaptionBatchDialog.value = false;
 }
 
 async function getSelectedItemsForClipboard(limit = 10) {
@@ -6918,7 +7060,7 @@ const onFileSaved = async (success: boolean, payload: SavedFilePayload = {}) => 
     if (payload.saveAsNew && payload.filePath) {
       uiStore.updateFileVersion(payload.filePath);
       clearPreviewPreloadCache(payload.filePath);
-      const inserted = await indexAndInsertSavedFile(payload.filePath);
+      const inserted = await indexAndInsertSavedFile(payload.filePath, payload.saveAsContext || null);
       if (!inserted) {
         await updateContent();
       } else {
@@ -7882,6 +8024,7 @@ function handleDedupCullingStatusUpdated(fileId: number, cullingFlag: number) {
 type SavedFilePayload = {
   saveAsNew?: boolean;
   filePath?: string;
+  saveAsContext?: SaveAsContext | null;
 };
 
 const insertIndexedFileIntoList = async (indexedFile: any) => {
@@ -7938,12 +8081,27 @@ const insertIndexedFileIntoList = async (indexedFile: any) => {
   return true;
 };
 
-const indexAndInsertSavedFile = async (filePath: string) => {
+const indexAndInsertSavedFile = async (filePath: string, saveAsContext: SaveAsContext | null = null) => {
   const currentFile = fileList.value[selectedItemIndex.value];
-  if (!currentFile?.folder_id) return false;
+  const folderId = Number(saveAsContext?.folderId || currentFile?.folder_id || 0);
+  if (folderId <= 0) return false;
 
-  const indexedFile = await addFileToDb(currentFile.folder_id, filePath);
+  const indexedFile = await addFileToDb(folderId, filePath);
   if (!indexedFile) return false;
+
+  const fileId = Number(indexedFile.id || 0);
+  if (fileId > 0 && saveAsContext?.collectionId) {
+    try {
+      await addFilesToCollection(saveAsContext.collectionId, [fileId]);
+    } catch (error) {
+      console.error('Failed to add saved file to collection:', error);
+    }
+  } else if (fileId > 0 && saveAsContext?.tagId) {
+    const result = await addTagToFile(fileId, saveAsContext.tagId);
+    if (result === null) {
+      console.error('Failed to add saved file tag:', saveAsContext.tagId);
+    }
+  }
 
   return insertIndexedFileIntoList(indexedFile);
 };
@@ -9114,6 +9272,8 @@ async function openImageEditor(index: number) {
   if (!file) return;
   const fileId = Number(file.id || 0);
   if (fileId <= 0) return;
+
+  imageEditorSaveAsContexts.set(fileId, getCurrentSaveAsContext(file));
 
   const webViewLabel = 'imageeditor';
   const imageWindow = await WebviewWindow.getByLabel(webViewLabel);

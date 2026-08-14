@@ -47,7 +47,7 @@
     <!-- buttons -->
     <div class="mt-2 flex justify-end space-x-4">
       <button v-if="thirdText.length > 0"
-        :class="['px-4 py-1 rounded-box cursor-pointer', warningThird ? 'hover:bg-error hover:text-base-100' : 'hover:bg-base-100 hover:text-base-content']" 
+        :class="['px-4 py-1 rounded-box cursor-pointer', warningThird ? 'hover:bg-error hover:text-error-content' : 'hover:bg-base-100 hover:text-base-content']" 
         @click="clickThird"
       >{{ thirdText }}</button>
 

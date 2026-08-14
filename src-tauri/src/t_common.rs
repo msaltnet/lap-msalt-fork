@@ -33,7 +33,7 @@ pub const RAW_IMGS: &[&str] = &[
     "rwl", // Leica
     "mrw", // Minolta / Konica Minolta
     "3fr", // Hasselblad
-    "mos", // Leaf / Phase One
+    "mos", "iiq", // Leaf / Phase One
     // "x3f", // Sigma / Foveon - temporarily disabled: current LibRaw path reports FileUnsupported for sampled X3F files, so indexing fails at RAW dimensions.
     "dcr", "kdc", // Kodak
     "erf", // Epson

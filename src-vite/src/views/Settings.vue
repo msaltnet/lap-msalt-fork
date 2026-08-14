@@ -384,6 +384,62 @@
             </div>
           </div>
 
+          <!-- local AI captions -->
+          <div class="rounded-box p-2 space-y-2 bg-base-300/30 border border-base-content/5 shadow-sm">
+            <div class="flex items-center justify-between gap-3 px-1">
+              <div class="min-w-0 flex flex-col gap-0.5">
+                <span class="font-bold uppercase text-[10px] tracking-widest text-base-content/30">
+                  {{ $t('settings.ai_caption.title') }}
+                </span>
+                <span class="text-xs text-base-content/40">
+                  {{ $t('settings.ai_caption.enable_hint') }}
+                </span>
+              </div>
+              <input
+                v-model="config.settings.aiCaption.enabled"
+                type="checkbox"
+                class="toggle toggle-primary toggle-sm shrink-0"
+                :aria-label="$t('settings.ai_caption.enable')"
+              />
+            </div>
+            <label class="grid grid-cols-[minmax(0,1fr)_minmax(15rem,1.2fr)] items-center gap-4 px-1">
+              <span class="text-sm leading-5">{{ $t('settings.ai_caption.endpoint') }}</span>
+              <input
+                v-model="config.settings.aiCaption.endpoint"
+                type="url"
+                class="input input-bordered input-sm w-full font-mono text-xs"
+                spellcheck="false"
+                autocomplete="off"
+                placeholder="http://127.0.0.1:11434/v1"
+              />
+            </label>
+            <label class="grid grid-cols-[minmax(0,1fr)_minmax(15rem,1.2fr)] items-center gap-4 px-1">
+              <span class="text-sm leading-5">{{ $t('settings.ai_caption.model') }}</span>
+              <input
+                v-model="config.settings.aiCaption.model"
+                type="text"
+                class="input input-bordered input-sm w-full font-mono text-xs"
+                spellcheck="false"
+                autocomplete="off"
+                placeholder="gemma3:4b"
+              />
+            </label>
+            <div class="flex items-end justify-between gap-4 px-1 pt-1">
+              <p class="max-w-md text-[11px] leading-4 text-base-content/35">
+                {{ $t('settings.ai_caption.privacy_hint') }}
+              </p>
+              <button
+                type="button"
+                class="btn btn-outline btn-primary btn-xs shrink-0 min-w-28"
+                :disabled="isTestingCaptionProvider || !String(config.settings.aiCaption.endpoint || '').trim() || !String(config.settings.aiCaption.model || '').trim()"
+                @click="testCaptionProviderConnection"
+              >
+                <span v-if="isTestingCaptionProvider" class="loading loading-spinner loading-xs"></span>
+                {{ $t(isTestingCaptionProvider ? 'settings.ai_caption.testing' : 'settings.ai_caption.test_connection') }}
+              </button>
+            </div>
+          </div>
+
           <!-- find similar -->
           <div class="rounded-box p-2 space-y-2 bg-base-300/30 border border-base-content/5 shadow-sm">
             <div class="flex items-center gap-2 text-base-content/30">
@@ -656,6 +712,7 @@ import {
   downloadMultilingualImageSearchModel,
   cancelMultilingualImageSearchModelDownload,
   listenImageSearchModelDownloadProgress,
+  testAiCaptionProvider,
 } from '@/common/api';
 import { formatFileSize, isLinux, isMac, setTheme, SCALE_VALUES } from '@/common/utils';
 import { getShortcutLabels, ShortcutActionId, ShortcutPlatform } from '@/common/shortcuts';
@@ -670,7 +727,7 @@ import RestoreDialog from '@/components/RestoreDialog.vue';
 import TButton from '@/components/TButton.vue';
 
 /// i18n
-const { locale, messages } = useI18n();
+const { locale, messages, t } = useI18n();
 const localeMsg = computed(() => messages.value[config.settings.language] as any);
 const toast = useToast();
 const shortcutPlatform: ShortcutPlatform = isMac ? 'mac' : (isLinux ? 'linux' : 'windows');
@@ -702,6 +759,7 @@ const multilingualModelDownloadProgress = ref(0);
 const multilingualModelDownloadedBytes = ref(0);
 const multilingualModelTotalBytes = ref(0);
 const isMultilingualModelAvailable = ref(false);
+const isTestingCaptionProvider = ref(false);
 let unlistenImageSearchModelDownloadProgress: (() => void) | null = null;
 
 const onRestoreDone = () => {
@@ -1232,6 +1290,22 @@ const cancelMultilingualModelDownload = async () => {
   await cancelMultilingualImageSearchModelDownload();
 };
 
+async function testCaptionProviderConnection() {
+  if (isTestingCaptionProvider.value) return;
+  isTestingCaptionProvider.value = true;
+  try {
+    await testAiCaptionProvider(
+      String(config.settings.aiCaption.endpoint || '').trim(),
+      String(config.settings.aiCaption.model || '').trim(),
+    );
+    toast.success(t('settings.ai_caption.connection_success'));
+  } catch (error: any) {
+    toast.error(error?.message || String(error));
+  } finally {
+    isTestingCaptionProvider.value = false;
+  }
+}
+
 onMounted(async () => {
   window.addEventListener('keydown', handleKeyDown);
   if (typeof config.settings.tabIndex !== 'number' || config.settings.tabIndex < 0 || config.settings.tabIndex > 7) {
@@ -1239,6 +1313,13 @@ onMounted(async () => {
   }
   if (typeof config.settings.imageSearch.model !== 'number') {
     config.settings.imageSearch.model = 0;
+  }
+  if (!config.settings.aiCaption || typeof config.settings.aiCaption !== 'object') {
+    config.settings.aiCaption = {
+      enabled: false,
+      endpoint: 'http://127.0.0.1:11434/v1',
+      model: '',
+    };
   }
   unlistenImageSearchModelDownloadProgress = await listenImageSearchModelDownloadProgress((event: any) => {
     const progress = Number(event?.payload?.progress ?? 0);

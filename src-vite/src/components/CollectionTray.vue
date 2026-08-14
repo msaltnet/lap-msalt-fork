@@ -147,6 +147,7 @@
       :message="$t('collection.delete_confirm_message', { name: deleteTarget.name })"
       :OkText="$t('collection.delete_confirm_ok')"
       :cancelText="$t('msgbox.cancel')"
+      :warningOk="true"
       @ok="confirmDelete"
       @cancel="deleteTarget = null"
     />

@@ -57,7 +57,7 @@
             <IconSimilar class="w-8 h-8 mx-auto text-base-content/30" />
             <p v-if="similarHasScanned" class="text-xs font-medium">{{ $t('info_panel.dedup.similar.empty_title') }}</p>
             <p v-else class="text-xs leading-5 text-base-content/50">{{ $t('info_panel.dedup.similar.description') }}</p>
-            <PanelActionButton v-if="!similarHasScanned" :icon="IconSimilar" :disabled="similarEligibleCountLoading || similarEligibleCount === 0 || similarLoading" @click="startSimilar">
+            <PanelActionButton v-if="!similarHasScanned" primary :disabled="similarEligibleCountLoading || similarEligibleCount === 0 || similarLoading" @click="startSimilar">
               {{ similarEligibleCountLoading ? $t('tooltip.loading') : $t('info_panel.dedup.similar.analyze', { count: similarEligibleCount.toLocaleString() }) }}
             </PanelActionButton>
           </div>
@@ -385,7 +385,7 @@
     v-if="showLargeSimilarScanConfirm"
     :title="$t('info_panel.dedup.tabs.similar')"
     :message="$t('info_panel.dedup.similar.large_scan_confirm', { count: similarEligibleCount.toLocaleString() })"
-    :OkText="$t('info_panel.dedup.similar.analyze', { count: similarEligibleCount.toLocaleString() })"
+    :OkText="$t('info_panel.dedup.similar.analyze_confirm')"
     :cancelText="$t('msgbox.cancel')"
     @ok="confirmLargeSimilarScan"
     @cancel="showLargeSimilarScanConfirm = false"

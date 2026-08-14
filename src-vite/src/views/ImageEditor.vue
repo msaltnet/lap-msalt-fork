@@ -2017,6 +2017,7 @@ const setEditParams = (overrides: { fileName?: string; destFilePath?: string; ou
 const executeSave = async (overrides: { fileName?: string; destFilePath?: string; outputFormat?: string } = {}) => {
   isProcessing.value = true;
   let success = false;
+  const sourceFileId = Number(fileInfo.value?.id || 0);
   const savedFilePath = overrides.destFilePath || fileInfo.value.file_path;
   const saveAsNew = savedFilePath !== fileInfo.value.file_path;
   try {
@@ -2031,9 +2032,9 @@ const executeSave = async (overrides: { fileName?: string; destFilePath?: string
       if (uiStore.activeAdjustments.filePath === fileInfo.value.file_path) {
         uiStore.clearActiveAdjustments();
       }
-      sendToParent({ type: 'success', saveAsNew, filePath: savedFilePath });
+      sendToParent({ type: 'success', sourceFileId, saveAsNew, filePath: savedFilePath });
     } else {
-      sendToParent({ type: 'failed' });
+      sendToParent({ type: 'failed', sourceFileId });
     }
   }
 };
@@ -2064,7 +2065,7 @@ const clickSave = async () => {
       });
     } catch {
       isProcessing.value = false;
-      sendToParent({ type: 'failed' });
+      sendToParent({ type: 'failed', sourceFileId: Number(fileInfo.value?.id || 0) });
     }
   } else {
     showOverwriteConfirm.value = true;

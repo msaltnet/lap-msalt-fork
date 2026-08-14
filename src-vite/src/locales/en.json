@@ -466,7 +466,8 @@
         "groups_count": "{count} similar sets",
         "load_more": "Load more",
         "error_title": "Unable to load similar photos",
-        "empty_title": "No similar photos found"
+        "empty_title": "No similar photos found",
+        "analyze_confirm": "Analyze"
       },
       "reclaimable_size": "Reclaimable",
       "groups_title": "Duplicate Sets",
@@ -589,6 +590,8 @@
       "open_video_in_app": "Open video in {app}...",
       "open_selected_images_in_app": "Open photos in {app}...",
       "compare_selected_images": "Compare",
+      "generate_ai_caption": "Generate AI caption",
+      "generate_ai_captions": "Generate AI captions",
       "open_selected_videos_in_app": "Open videos in {app}...",
       "open_in_app": "Open in external app...",
       "find_similar_images": "Find similar photos",
@@ -655,6 +658,18 @@
     "reset": "Reset",
     "cancel": "Cancel",
     "close": "Close",
+    "caption_batch": {
+      "title": "Generate AI captions",
+      "progress": "{current} of {total}",
+      "succeeded": "Generated",
+      "skipped": "Skipped",
+      "failed": "Failed",
+      "cancel": "Cancel",
+      "cancelling": "Cancelling after the current photo...",
+      "close": "Close",
+      "completed": "{succeeded} generated, {skipped} skipped, {failed} failed.",
+      "cancelled": "Cancelled: {succeeded} generated, {skipped} skipped, {failed} failed."
+    },
     "unsaved_changes": {
       "title": "Unsaved changes",
       "message": "You have unsaved changes. Do you want to save them?"
@@ -991,7 +1006,20 @@
     "geo_location": "Location",
     "tags": "Tags",
     "comment": "Comment",
-    "capture_settings": "Capture settings"
+    "capture_settings": "Capture settings",
+    "ai_caption": {
+      "title": "AI Caption",
+      "generate": "Generate",
+      "regenerate": "Regenerate",
+      "delete": "Delete",
+      "generating": "Generating...",
+      "empty": "No AI caption has been generated.",
+      "outdated": "The source file changed after this caption was generated.",
+      "outdated_badge": "Outdated",
+      "generated": "AI caption generated.",
+      "deleted": "AI caption deleted.",
+      "metadata": "{model} · requested {language} · {time}"
+    }
   },
   "map": {
     "show_map": "Show map",
@@ -1409,6 +1437,17 @@
       "restore_restoring": "Restoring...",
       "restore_success": "Restore completed. {count} libraries restored: {names}",
       "restore_note": "Libraries with conflicting names will be renamed, and existing data will not be overwritten."
+    },
+    "ai_caption": {
+      "title": "AI captions",
+      "enable": "Enable local AI captions",
+      "enable_hint": "Generate captions with a vision model running on this computer.",
+      "endpoint": "Local API endpoint",
+      "model": "Vision model",
+      "privacy_hint": "Only localhost and loopback addresses are accepted. Lap does not install or start the model.",
+      "test_connection": "Test connection",
+      "testing": "Testing...",
+      "connection_success": "Connected to the local AI caption model."
     },
     "face_recognition": {
       "title": "People search",

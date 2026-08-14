@@ -28,6 +28,7 @@ import {
   IconBookmark,
   IconSplitOn,
   IconSplitOn4,
+  IconSparkles,
 } from '@/common/icons';
 
 // Label lookup table for "open in external app" command based on media type
@@ -55,6 +56,7 @@ export const useFileMenuItems = (
     selectMode?: Ref<boolean>;
     selectionMediaKind?: Ref<'image' | 'video' | 'mixed' | 'empty'>;
     selectionCount?: Ref<number>;
+    selectionHasImages?: Ref<boolean>;
   }
 ) => {
   const createAction = (actionName: string) => () => onAction(actionName);
@@ -99,6 +101,13 @@ export const useFileMenuItems = (
         action: createAction('compare-selected-images'),
       },
       {
+        label: String(localeMsg.value.menu.file.generate_ai_captions || 'Generate AI captions'),
+        icon: markRaw(IconSparkles),
+        hidden: !config.settings.aiCaption?.enabled,
+        disabled: !options?.selectionHasImages?.value,
+        action: createAction('generate-ai-captions'),
+      },
+      {
         label: openInAppLabel(kind, selectionCount, true),
         icon: markRaw(IconExternal),
         disabled: kind === 'empty' || selectionIsMixed || !appPath,
@@ -141,6 +150,13 @@ export const useFileMenuItems = (
         icon: markRaw(IconPrint),
         disabled: !isImage,
         action: createAction('print')
+      },
+      {
+        label: String(localeMsg.value.menu.file.generate_ai_caption || 'Generate AI caption'),
+        icon: markRaw(IconSparkles),
+        hidden: !config.settings.aiCaption?.enabled,
+        disabled: !isImage,
+        action: createAction('generate-ai-captions'),
       },
       { label: "-", action: null },
       {

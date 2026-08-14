@@ -466,7 +466,8 @@
         "groups_count": "{count} grupos similares",
         "load_more": "Cargar más",
         "error_title": "No se pudieron cargar las fotos similares",
-        "empty_title": "No se encontraron fotos similares"
+        "empty_title": "No se encontraron fotos similares",
+        "analyze_confirm": "Analizar"
       },
       "reclaimable_size": "Recuperable",
       "groups_title": "Grupos duplicados",
@@ -589,6 +590,8 @@
       "open_video_in_app": "Abrir video en {app}...",
       "open_selected_images_in_app": "Abrir fotos en {app}...",
       "compare_selected_images": "Comparar",
+      "generate_ai_caption": "Generar descripción con IA",
+      "generate_ai_captions": "Generar descripciones con IA",
       "open_selected_videos_in_app": "Abrir videos en {app}...",
       "open_in_app": "Abrir en app externa...",
       "find_similar_images": "Buscar fotos similares",
@@ -655,6 +658,18 @@
     "reset": "Restablecer",
     "cancel": "Cancelar",
     "close": "Cerrar",
+    "caption_batch": {
+      "title": "Generar descripciones con IA",
+      "progress": "{current} de {total}",
+      "succeeded": "Generadas",
+      "skipped": "Omitidas",
+      "failed": "Fallidas",
+      "cancel": "Cancelar",
+      "cancelling": "Se cancelará después de la foto actual...",
+      "close": "Cerrar",
+      "completed": "{succeeded} generadas, {skipped} omitidas, {failed} fallidas.",
+      "cancelled": "Cancelado: {succeeded} generadas, {skipped} omitidas, {failed} fallidas."
+    },
     "unsaved_changes": {
       "title": "Cambios sin guardar",
       "message": "Tienes cambios sin guardar. ¿Quieres guardarlos?"
@@ -991,7 +1006,20 @@
     "geo_location": "Ubicación",
     "tags": "Etiquetas",
     "comment": "Comentario",
-    "capture_settings": "Ajustes captura"
+    "capture_settings": "Ajustes captura",
+    "ai_caption": {
+      "title": "Descripción con IA",
+      "generate": "Generar",
+      "regenerate": "Volver a generar",
+      "delete": "Eliminar",
+      "generating": "Generando...",
+      "empty": "No se ha generado ninguna descripción con IA.",
+      "outdated": "El archivo original cambió después de generar esta descripción.",
+      "outdated_badge": "Desactualizada",
+      "generated": "Descripción con IA generada.",
+      "deleted": "Descripción con IA eliminada.",
+      "metadata": "{model} · idioma solicitado: {language} · {time}"
+    }
   },
   "map": {
     "show_map": "Ver mapa",
@@ -1409,6 +1437,17 @@
       "restore_restoring": "Restaurando...",
       "restore_success": "Restauración completada. {count} bibliotecas restauradas: {names}",
       "restore_note": "Las bibliotecas con nombres conflictivos se renombrarán y los datos existentes no se sobrescribirán."
+    },
+    "ai_caption": {
+      "title": "Descripciones con IA",
+      "enable": "Activar descripciones locales con IA",
+      "enable_hint": "Genera descripciones con un modelo de visión que se ejecuta en este equipo.",
+      "endpoint": "Endpoint de API local",
+      "model": "Modelo de visión",
+      "privacy_hint": "Solo se aceptan localhost y direcciones de bucle local. Lap no instala ni inicia el modelo.",
+      "test_connection": "Probar conexión",
+      "testing": "Probando...",
+      "connection_success": "Conectado al modelo local de descripciones con IA."
     },
     "face_recognition": {
       "title": "Búsqueda de personas",
