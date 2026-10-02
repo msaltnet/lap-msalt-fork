@@ -111,8 +111,8 @@
               @mousedown="cropStatus===1 ? startDrag('move', $event) : null"
               @dblclick="clickDoCrop"
             >
-              <template v-if="cropStatus===1 && isDragging">
-                <div class="crop-dimensions-display">
+              <template v-if="cropStatus===1 && (isDragging || isRotating)">
+                <div v-if="isDragging" class="crop-dimensions-display">
                   {{ crop.width }} x {{ crop.height }}
                 </div>
                 <div class="grid-lines">
@@ -133,6 +133,46 @@
                 <div class="drag-handle bottom-right" @mousedown.stop="startDrag('bottom-right', $event)"></div>
               </template>
             </div>
+        </div>
+
+        <!-- straighten angle + crop confirm/cancel -->
+        <div
+          v-if="cropStatus === 1"
+          class="w-full max-w-2xl shrink-0 flex items-center gap-3 px-4"
+        >
+          <div
+            class="flex items-center gap-3 flex-1 min-w-0"
+            @pointerdown="isRotating = true"
+            @pointerup="isRotating = false"
+            @pointercancel="isRotating = false"
+          >
+            <span class="text-xs font-medium text-base-content/50 shrink-0">{{ $t('msgbox.image_editor.angle') }}</span>
+            <AngleSlider
+              v-model="cropAngleModel"
+              :min="-45"
+              :max="45"
+              :step="1"
+              class="flex-1 min-w-0"
+            />
+          </div>
+
+          <div class="w-px h-5 bg-base-content/10 shrink-0"></div>
+
+          <div class="flex items-center gap-1 shrink-0">
+            <TButton
+              buttonSize="small"
+              :icon="IconClose"
+              :tooltip="$t('msgbox.image_editor.cancel_crop')"
+              @click="clickCancelCrop"
+            />
+            <TButton
+              buttonSize="small"
+              :icon="IconOk"
+              :selected="true"
+              :tooltip="$t('msgbox.image_editor.confirm_crop')"
+              @click="clickDoCrop"
+            />
+          </div>
         </div>
 
       </div>
@@ -233,14 +273,6 @@
 
           <div v-else class="space-y-3">
             <div class="flex items-center gap-1">
-              <TButton
-                buttonSize="small"
-                :icon="IconClose"
-                :selected="true"
-                :tooltip="$t('msgbox.image_editor.cancel_crop')"
-                @click="clickCancelCrop"
-              />
-              
               <select v-model="config.imageEditor.cropShape" class="select select-bordered select-sm flex-1 min-w-0" :disabled="cropBoxFixed" @change="onChangeCropShape">
                 <option v-for="option in cropShapeOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
               </select>
@@ -253,20 +285,12 @@
                 :iconStyle="{ transform: `rotate(${isPortrait ? 90 : 0}deg)` }"
                 @click="togglePortraitAndLandscape"
               />
-              
+
               <TButton
                 buttonSize="small"
                 :icon="cropBoxFixed ? IconZoomOut : IconZoomIn"
                 :tooltip="cropBoxFixed ? $t('msgbox.image_editor.zoom') : $t('msgbox.image_editor.zoom')"
                 @click="toggleCropBoxFixed"
-              />
-
-              <TButton
-                buttonSize="small"
-                :icon="IconOk"
-                :selected="true"
-                :tooltip="$t('msgbox.image_editor.confirm_crop')"
-                @click="clickDoCrop"
               />
             </div>
           </div>
@@ -531,6 +555,7 @@ import { useI18n } from 'vue-i18n';
 import { config } from '@/common/config';
 import { isWin, isLinux, setTheme, SCALE_VALUES, getFolderPath, getFileExtension, shortenFilename, getFullPath, combineFileName, getSelectOptions, getAssetSrc, getPreviewUrl, getThumbUrl, shouldUseBackendPreview } from '@/common/utils';
 import { editImage, checkFileExists, getFileInfo } from '@/common/api';
+import { getMaxInscribedRect, clampCenterInRotatedRect, maxResizeT } from '@/common/geometry';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { emit as tauriEmit, listen } from '@tauri-apps/api/event';
 
@@ -538,6 +563,7 @@ import TitleBar from '@/components/TitleBar.vue';
 import MessageBox from '@/components/MessageBox.vue';
 import TButton from '@/components/TButton.vue';
 import SliderInput from '@/components/SliderInput.vue';
+import AngleSlider from '@/components/AngleSlider.vue';
 import ImageHistogram from '@/components/ImageHistogram.vue';
 
 import {
@@ -606,7 +632,13 @@ async function loadFileInfo(fileId: number) {
       file.thumbnail = getThumbUrl(file.id);
       fileInfo.value = file;
       newFileName.value = file.name?.substring(0, file.name.lastIndexOf('.')) || file.name || '';
-      const src = getPreviewUrl(file);
+      const src = getPreviewUrl(
+        file.id,
+        file.file_path,
+        false,
+        Number(file.modified_at || 0),
+        true, // Match the export decoder and pixel coordinates.
+      );
       initialImageSrc.value = typeof src === 'string' ? src : '';
     }
   } catch {
@@ -722,7 +754,7 @@ const imageStyle = computed((): CSSProperties => ({
   filter: showOriginalWhilePressed.value ? 'none' : adjustmentFilter.value,
   transform: `
     translate(${position.value.left}px, ${position.value.top}px)
-    rotate(${rotate.value}deg)
+    rotate(${displayRotate.value}deg)
     scaleX(${isFlippedX.value ? -1 : 1})
     scaleY(${isFlippedY.value ? -1 : 1})
     scale(${scale.value})
@@ -765,6 +797,17 @@ const cropBoxFixed = ref(false);
 
 const cropBox = ref({ left: 0, top: 0, width: 0, height: 0 });
 const crop = ref({ left: 0, top: 0, width: 0, height: 0 });
+
+const cropAngle = ref(0);
+const isRotating = ref(false);
+
+// The rotation shown on screen: the fixed 90° orientation plus the arbitrary
+// crop-time straighten angle (only meaningful while cropping / after crop).
+const displayRotate = computed(() =>
+  cropStatus.value === 1 || cropApplied.value
+    ? rotate.value + cropAngle.value
+    : rotate.value,
+);
 
 const isDragging = ref(false);
 const dragHandle = ref('');
@@ -1409,7 +1452,13 @@ const initEditImage = async () => {
     void (async () => {
       try {
         if (loadingId !== initEditImageLoadingId.value) return;
-        const previewSrc = getPreviewUrl(fileInfo.value.id, fileInfo.value.file_path);
+        const previewSrc = getPreviewUrl(
+          fileInfo.value.id,
+          fileInfo.value.file_path,
+          false,
+          Number(fileInfo.value.modified_at || 0),
+          true, // Match the export decoder and pixel coordinates.
+        );
         if (previewSrc) {
           imageSrc.value = previewSrc;
         }
@@ -1546,6 +1595,7 @@ const clickStartCrop = () => {
   cropStatus.value = 1;
   cropApplied.value = false;
   cropBoxFixed.value = false;
+  cropAngle.value = 0;
   initCropBox();
 };
 
@@ -1572,6 +1622,7 @@ const clearCrop = () => {
   cropBoxFixed.value = false;
   crop.value = { left: 0, top: 0, width: 0, height: 0 };
   cropBox.value = { left: 0, top: 0, width: 0, height: 0 };
+  cropAngle.value = 0;
   autoFitVisualArea();
 };
 
@@ -1590,6 +1641,7 @@ const clickCancelCrop = () => {
   cropApplied.value = false;
   crop.value = { left: 0, top: 0, width: 0, height: 0 };
   cropBox.value = { left: 0, top: 0, width: 0, height: 0 };
+  cropAngle.value = 0;
   autoFitVisualArea();
 };
 
@@ -1628,6 +1680,76 @@ const toggleCropBoxFixed = () => {
 const onChangeCropShape = () => {
   initCropBox();
 };
+
+const recomputeCropBoxForAngle = () => {
+  if (cropStatus.value !== 1) return;
+  containerRect.value = containerRef.value?.getBoundingClientRect() || null;
+  imageRect.value = imageRef.value?.getBoundingClientRect() || null;
+  if (!imageRect.value || !containerRect.value) return;
+
+  // Effective dimensions after the fixed 90° rotation, plus the rotated AABB the
+  // backend crops from (shared helper keeps all three mappings on one formula).
+  const { imgWidth, imgHeight, bbW, bbH } = getCropSpaceDims();
+
+  // Selected crop aspect ratio (null when "custom" / free).
+  const selectedShape = cropShapeOptions.value.find(option => option.value === String(config.imageEditor.cropShape) && option.value !== '0');
+  let aspectRatio: number | undefined;
+  if (selectedShape && selectedShape.label) {
+    const parts = selectedShape.label.split(':');
+    aspectRatio = parseInt(parts[0], 10) / parseInt(parts[1], 10);
+  }
+
+  // Largest axis-aligned rectangle inside the rotated image, expressed in the
+  // rotated image's bounding-box pixel space (what the backend crops from).
+  const rect = getMaxInscribedRect(imgWidth, imgHeight, cropAngle.value, aspectRatio);
+
+  const scaleX = imageRect.value.width / bbW;
+  const scaleY = imageRect.value.height / bbH;
+  const wScreen = rect.width * scaleX;
+  const hScreen = rect.height * scaleY;
+
+  const centerX = imageRect.value.left - containerRect.value.left + imageRect.value.width / 2;
+  const centerY = imageRect.value.top - containerRect.value.top + imageRect.value.height / 2;
+
+  cropBox.value = {
+    left: centerX - wScreen / 2,
+    top: centerY - hScreen / 2,
+    width: wScreen,
+    height: hScreen,
+  };
+
+  crop.value = {
+    left: Math.round(rect.x),
+    top: Math.round(rect.y),
+    width: Math.round(rect.width),
+    height: Math.round(rect.height),
+  };
+};
+
+let cropAngleRaf = 0;
+
+// Apply an angle and refresh the crop box on the next frame. The recompute is
+// rAF-coalesced: rapid slider events collapse to one layout read + inscribed-rect
+// solve per frame, avoiding forced-reflow-per-tick. Vue patches the DOM in a
+// microtask, so the rAF callback already sees the updated rotation.
+const applyCropAngle = (v: number) => {
+  const clamped = Math.min(45, Math.max(-45, Number.isFinite(v) ? v : 0));
+  cropAngle.value = clamped;
+  enableTransition.value = false;
+  if (cropAngleRaf) cancelAnimationFrame(cropAngleRaf);
+  cropAngleRaf = requestAnimationFrame(() => {
+    cropAngleRaf = 0;
+    recomputeCropBoxForAngle();
+    enableTransition.value = true;
+  });
+};
+
+const setCropAngle = (v: number) => applyCropAngle(v);
+
+const cropAngleModel = computed({
+  get: () => cropAngle.value,
+  set: (v: number) => setCropAngle(v),
+});
 
 const initCropBox = () => {
   containerRect.value = containerRef.value?.getBoundingClientRect() || null;
@@ -1668,23 +1790,54 @@ const initCropBox = () => {
   }
 
   updateCropFromCropBox();
+
+  // If the image is already straightened, re-constrain the crop box to the
+  // rotated image (honoring the selected aspect ratio).
+  if (cropAngle.value !== 0) {
+    recomputeCropBoxForAngle();
+  }
 };
 
-const updateCropFromCropBox = () => {
+// Dimensions of the pixel space the backend crops from: the axis-aligned
+// bounding box (AABB) of the image after the fixed 90° rotation PLUS the
+// arbitrary straighten angle. `imgWidth/imgHeight` are the 90°-rotated natural
+// dimensions; `bbW/bbH` are the AABB dimensions the crop coordinates live in.
+// When cropAngle is 0, bbW/bbH equal imgWidth/imgHeight (pre-existing behavior).
+const getCropSpaceDims = () => {
+  const imgWidth = rotate.value % 180 === 0 ? imageWidth.value : imageHeight.value;
+  const imgHeight = rotate.value % 180 === 0 ? imageHeight.value : imageWidth.value;
+  const theta = Math.abs(cropAngle.value) * Math.PI / 180;
+  const cos = Math.cos(theta);
+  const sin = Math.sin(theta);
+  return {
+    imgWidth,
+    imgHeight,
+    bbW: imgWidth * cos + imgHeight * sin,
+    bbH: imgHeight * cos + imgWidth * sin,
+  };
+};
+
+// `cached` lets a caller supply already-known rects to skip the two forced
+// reflows from getBoundingClientRect(). Used while dragging the crop box: the
+// image itself does not move, so its rect (and the container's) are constant for
+// the whole gesture. Pass nothing (or a null field) to read fresh — required when
+// the image moves (cropBoxFixed) or on layout/resize.
+const updateCropFromCropBox = (cached?: { imageRect?: DOMRect | null; containerRect?: DOMRect | null } | null) => {
   if (cropBox.value.width === 0 || cropBox.value.height === 0) {
     crop.value = { left: 0, top: 0, width: 0, height: 0 };
     return;
   }
 
-  containerRect.value = containerRef.value?.getBoundingClientRect() || null;
-  imageRect.value = imageRef.value?.getBoundingClientRect() || null;
+  containerRect.value = cached?.containerRect ?? containerRef.value?.getBoundingClientRect() ?? null;
+  imageRect.value = cached?.imageRect ?? imageRef.value?.getBoundingClientRect() ?? null;
   if (!imageRect.value || !containerRect.value) return;
 
-  const imgWidth = rotate.value % 180 === 0 ? imageWidth.value : imageHeight.value;
-  const imgHeight = rotate.value % 180 === 0 ? imageHeight.value : imageWidth.value;
+  // imageRect is the rotated AABB, so map screen px into the AABB pixel space
+  // (bbW×bbH) the backend crops from — NOT imgWidth/imgHeight.
+  const { bbW, bbH } = getCropSpaceDims();
 
-  const scaleX = imgWidth / imageRect.value.width;
-  const scaleY = imgHeight / imageRect.value.height;
+  const scaleX = bbW / imageRect.value.width;
+  const scaleY = bbH / imageRect.value.height;
 
   crop.value = {
     left: Math.round(scaleX * (cropBox.value.left + containerRect.value.left - imageRect.value.left)),
@@ -1703,11 +1856,12 @@ const updateCropBoxFromCrop = () => {
   imageRect.value = imageRectOriginal.value;
   if (!imageRect.value || !containerRect.value) return;
 
-  const imgWidth = rotate.value % 180 === 0 ? imageWidth.value : imageHeight.value;
-  const imgHeight = rotate.value % 180 === 0 ? imageHeight.value : imageWidth.value;
+  // imageRectOriginal is likewise the rotated AABB; map crop (AABB pixel space)
+  // back to screen px using bbW/bbH so it stays consistent with an active angle.
+  const { bbW, bbH } = getCropSpaceDims();
 
-  const scaleX = imgWidth / imageRect.value.width;
-  const scaleY = imgHeight / imageRect.value.height;
+  const scaleX = bbW / imageRect.value.width;
+  const scaleY = bbH / imageRect.value.height;
 
   if (scaleX === 0 || scaleY === 0) return;
 
@@ -1764,7 +1918,7 @@ const fitCropBoxToContainer = () => {
     height: newCropBoxHeight,
   };
 
-  imageRef.value?.addEventListener('transitionend', updateCropFromCropBox, { once: true });
+  imageRef.value?.addEventListener('transitionend', () => updateCropFromCropBox(), { once: true });
 };
 
 const clickRotate = (degree: number) => {
@@ -1802,6 +1956,24 @@ const startDrag = (handle: string, event: MouseEvent) => {
   const initialImagePosition = { ...position.value };
   const initialImageRect = imageRef.value?.getBoundingClientRect() || null;
 
+  // Precompute the image geometry once (it is stable while dragging the crop box).
+  // `cos`/`sin` are of the full display rotation; `hw`/`hh` the half display size
+  // of the un-rotated image. The crop box is axis-aligned in screen space, so the
+  // "box inside rotated image" constraint is solved in the rotated frame (see
+  // geometry.ts) — O(1), exact and kink-free.
+  const imgRect = initialImageRect;
+  const cRect = containerRef.value?.getBoundingClientRect() || null;
+  const geo = imgRect && cRect
+    ? {
+        cx: imgRect.left - cRect.left + imgRect.width / 2,
+        cy: imgRect.top - cRect.top + imgRect.height / 2,
+        cos: Math.cos((displayRotate.value * Math.PI) / 180),
+        sin: Math.sin((displayRotate.value * Math.PI) / 180),
+        hw: (imageWidth.value * scale.value) / 2,
+        hh: (imageHeight.value * scale.value) / 2,
+      }
+    : null;
+
   const doDrag = (e: MouseEvent) => {
     if (!isDragging.value || !initialImageRect || !containerRect.value) return;
 
@@ -1824,29 +1996,20 @@ const startDrag = (handle: string, event: MouseEvent) => {
       position.value.left = initialImagePosition.left + clampedDx;
       position.value.top = initialImagePosition.top + clampedDy;
     } else if (dragHandle.value === 'move') {
-      if (!imageRect.value) return;
-      const imageLeft = imageRect.value.left - containerRect.value.left;
-      const imageTop = imageRect.value.top - containerRect.value.top;
-      const imageRight = imageLeft + imageRect.value.width;
-      const imageBottom = imageTop + imageRect.value.height;
-
-      let newLeft = initialCropBoxData.left + dx;
-      let newTop = initialCropBoxData.top + dy;
-
-      if (newLeft < imageLeft) newLeft = imageLeft;
-      if (newTop < imageTop) newTop = imageTop;
-      if (newLeft + initialCropBoxData.width > imageRight) newLeft = imageRight - initialCropBoxData.width;
-      if (newTop + initialCropBoxData.height > imageBottom) newTop = imageBottom - initialCropBoxData.height;
-
-      cropBox.value.left = newLeft;
-      cropBox.value.top = newTop;
+      if (!geo) return;
+      const a = initialCropBoxData.width / 2;
+      const b = initialCropBoxData.height / 2;
+      // Desired box center (screen/container frame) from the raw drag delta.
+      const dxo = initialCropBoxData.left + dx + a - geo.cx;
+      const dyo = initialCropBoxData.top + dy + b - geo.cy;
+      // Project the center onto the valid region (rotated rect) — smooth slide
+      // along the boundary, no binary search / path dependence.
+      const c = clampCenterInRotatedRect(dxo, dyo, a, b, geo.cos, geo.sin, geo.hw, geo.hh);
+      cropBox.value.left = geo.cx + c.x - a;
+      cropBox.value.top = geo.cy + c.y - b;
     } else {
-      if (!imageRect.value) return;
-      const imageLeft = imageRect.value.left - containerRect.value.left;
-      const imageTop = imageRect.value.top - containerRect.value.top;
-      const imageRight = imageLeft + imageRect.value.width;
-      const imageBottom = imageTop + imageRect.value.height;
-      let proposedBox = { ...initialCropBoxData };
+      if (!geo) return;
+      const proposedBox = { ...initialCropBoxData };
 
       if (dragHandle.value.includes('right')) proposedBox.width += dx;
       if (dragHandle.value.includes('left')) {
@@ -1880,31 +2043,61 @@ const startDrag = (handle: string, event: MouseEvent) => {
         }
       }
 
-      if (
-        proposedBox.width >= 10 &&
-        proposedBox.height >= 10 &&
-        proposedBox.left >= imageLeft &&
-        proposedBox.top >= imageTop &&
-        proposedBox.left + proposedBox.width <= imageRight + 0.1 &&
-        proposedBox.top + proposedBox.height <= imageBottom + 0.1
-      ) {
-        cropBox.value = proposedBox;
-      }
+      // Largest t in [0,1] toward the proposed box that still fits (closed form).
+      // t === 1 applies the full proposal; t < 1 glides the handle to the exact
+      // boundary instead of snapping back. Min size (10px) is enforced inside.
+      const t = maxResizeT(
+        initialCropBoxData, proposedBox,
+        geo.cx, geo.cy, geo.cos, geo.sin, geo.hw, geo.hh, 10,
+      );
+      cropBox.value = {
+        left: initialCropBoxData.left + t * (proposedBox.left - initialCropBoxData.left),
+        top: initialCropBoxData.top + t * (proposedBox.top - initialCropBoxData.top),
+        width: initialCropBoxData.width + t * (proposedBox.width - initialCropBoxData.width),
+        height: initialCropBoxData.height + t * (proposedBox.height - initialCropBoxData.height),
+      };
     }
 
-    updateCropFromCropBox();
+    // The image only moves in the cropBoxFixed 'move' case; otherwise reuse the
+    // drag-start rects to skip two forced reflows per frame.
+    const imageMoved = cropBoxFixed.value && dragHandle.value === 'move';
+    updateCropFromCropBox(
+      imageMoved ? null : { imageRect: initialImageRect, containerRect: cRect },
+    );
+  };
+
+  // Coalesce mousemove into one solve per animation frame (pointer events can
+  // arrive faster than the display refresh on high-Hz mice / trackpads).
+  let rafId = 0;
+  let lastEvent: MouseEvent | null = null;
+  const onMouseMove = (e: MouseEvent) => {
+    lastEvent = e;
+    if (rafId) return;
+    rafId = requestAnimationFrame(() => {
+      rafId = 0;
+      if (lastEvent) doDrag(lastEvent);
+    });
   };
 
   const stopDrag = () => {
+    if (rafId) {
+      cancelAnimationFrame(rafId);
+      rafId = 0;
+    }
+    // Apply the final pointer position synchronously so no pending frame is lost.
+    if (lastEvent) {
+      doDrag(lastEvent);
+      lastEvent = null;
+    }
     if (cropBoxFixed.value && dragHandle.value === 'move') {
       enableTransition.value = true;
     }
     isDragging.value = false;
-    window.removeEventListener('mousemove', doDrag);
+    window.removeEventListener('mousemove', onMouseMove);
     window.removeEventListener('mouseup', stopDrag);
   };
 
-  window.addEventListener('mousemove', doDrag);
+  window.addEventListener('mousemove', onMouseMove);
   window.addEventListener('mouseup', stopDrag);
 };
 
@@ -1995,6 +2188,7 @@ const setEditParams = (overrides: { fileName?: string; destFilePath?: string; ou
     flipHorizontal: isFlippedX.value,
     flipVertical: isFlippedY.value,
     rotate: rotate.value,
+    cropAngle: cropAngle.value,
     crop: {
       x: crop.value.left,
       y: crop.value.top,

@@ -9,14 +9,10 @@
   </p>
 </div>
 
-[English](../README.md) | [Deutsch](README.de.md) | [Français](README.fr.md) | [Español](README.es.md) | [Português](README.pt.md) | [Русский](README.ru.md) | 简体中文 | [日本語](README.ja.md) | [한국어](README.ko.md)
+[English](../README.md) | [Deutsch](README.de.md) | [Español](README.es.md) | [Français](README.fr.md) | [Italiano](README.it.md) | [Magyar](README.hu.md) | [Nederlands](README.nl.md) | [Polski](README.pl.md) | [Português](README.pt.md) | [Русский](README.ru.md) | [Українська](README.uk.md) | 中文简体 | [中文繁體](README.zh-TW.md) | [日本語](README.ja.md) | [한국어](README.ko.md)
 
 Lap 是一款开源、本地优先的照片管理工具，帮助您轻松浏览家庭相册、快速查找旧照片，并离线管理大型个人资料库。
 它是云端照片服务的隐私替代方案：无强制上传、内置本地 AI 搜索、以文件夹为中心的工作流，且完全免费使用。
-
-- 官方网站: [https://julyx10.github.io/lap/](https://julyx10.github.io/lap/)
-- 演示视频: [https://youtu.be/RbKqNKhbVUs](https://youtu.be/RbKqNKhbVUs)
-- 隐私政策: [PRIVACY.md](../PRIVACY.md)
 
 ## 下载 Lap
 
@@ -26,7 +22,8 @@ Lap 是一款开源、本地优先的照片管理工具，帮助您轻松浏览�
 | :-- | :-- | :-- |
 | **macOS (Apple Silicon / Intel)** | `_aarch64.dmg` / `_x64.dmg` | 已通过 Apple 公证 |
 | **Windows 10/11 (x64 / ARM64)** | `_x64_en-US.msi` / `_arm64_en-US.msi` | 未签名 — 如果 SmartScreen 阻止下载，请点击**仍要保留** |
-| **Linux (amd64 / arm64)** | `_amd64.deb` / `_arm64.deb` | 适用于 Debian 系发行版（Ubuntu、Debian、Linux Mint 等） |
+| **Linux (x64 / ARM64)** | `_amd64.deb` / `_arm64.deb` | 适用于 Debian 系发行版（Ubuntu、Debian、Linux Mint 等） |
+| **Linux (x64 / ARM64)** | `_amd64.AppImage` / `_aarch64.AppImage` | 赋予文件执行权限后，双击运行 |
 
 ### 使用 Homebrew 安装 macOS 版
 
@@ -38,7 +35,8 @@ brew install --cask lap
 ## 屏幕截图
 
 <p align="center">
-  <img src="../docs/public/screenshots/Lap_0.3.0_main_1.png" alt="Lap 本地照片管理界面" width="900">
+  <img src="../docs/public/screenshots/lap_library.png" alt="Lap 本地照片资料库" width="900">
+  <img src="../docs/public/screenshots/lap_map_view.png" alt="Lap 地图视图" width="900">
 </p>
 
 ## 为什么选择 Lap
@@ -51,17 +49,34 @@ brew install --cask lap
 
 ## 功能特性
 
-- **灵活浏览资料库**：支持时间线、文件夹、地点、相机、镜头、标签、收藏、评分、主题和人脸筛选。
-- **智能相册**：保存基于规则的视图，并可自定义分组、排序和顺序。
-- **合集**：无需移动或复制原始文件，即可通过合集灵活整理文件。
-- **本地 AI 搜索**：支持文本搜索、视觉相似搜索、主题、人脸聚类，以及可选的多语言搜索（支持 50 多种语言）。
-- **Apple 实况照片**：识别配对的 HEIC/MOV 实况照片，可在查看器中播放，并在重命名、移动、复制和删除时让关联的 MOV 与 AAE 文件保持同步。
-- **RAW + JPEG/HEIC 配对**：可选择将同一文件夹中同名的 RAW 文件及其 JPEG 或 HEIC 配对文件显示为一个项目。原始文件仍保持独立；重命名、移动、复制、粘贴和删除时会一起处理。
-- **以文件夹为中心的工作流**：支持多个资料库、拖放导入、复制粘贴导入、文件系统同步，以及安全的移动/复制/删除操作。
+- **灵活浏览资料库**：按日期、文件夹、地点、相机、镜头、标签、评分和人脸筛选，支持随机排序和小图过滤。
+- **交互式地图视图**：在地图上聚合浏览带地理位置的照片和视频，并遵循当前筛选条件。
+- **智能相册**：保存基于规则的视图，自定义分组和排序。
+- **合集与标签**：批量整理所选文件，无需移动或复制原件。
+- **本地 AI 搜索**：支持文本搜索、视觉相似搜索、主题、人脸聚类，以及可选的 50 多种语言搜索。
+- **Apple 实况照片与 Google 动态照片**：支持动态播放，并可通过统一的智能相册条件筛选。
+- **RAW + JPEG/HEIC 配对**：显示为一个项目，文件操作时同步处理关联文件。
+- **RAW 缩略图与预览来源**：可选择 RAW 渲染或相机内嵌预览。
+- **以文件夹为中心的工作流**：支持多个资料库、拖放导入、复制粘贴导入、文件系统同步，以及安全的移动、复制和删除。
+- **按日期整理导入**：支持按日、月、年或单一文件夹导入，保留原文件名并跳过重复内容。
 - **选片与对比工具**：包含四窗格图片对比查看器。
-- **去重清理工具**：查找重复文件，并将不需要的文件批量移至废纸篓。
+- **重复照片清理**：查看可释放空间，跨重复组批量清理。
+- **自定义浏览体验**：支持最高 1024 px 缩略图、网格大小与圆角设置，以及快速预览或独立查看窗口。
+- **桌面集成**：支持多个外部应用，以及 macOS、Windows 和 GNOME Linux 的壁纸设置。
 - **内置编辑**：支持裁剪、旋转、翻转、缩放和基础图像调整。
-- **广泛格式支持**：支持 60+ 种照片、RAW 和视频格式。
+- **广泛格式支持**：支持 60 多种照片、RAW 和视频格式。
+
+### 天地图 Token 申请与配置
+
+如需使用中国地区底图，可在地图设置中选择天地图，并填写自己的应用密钥（Key，也称 Token 或 `tk`）。
+
+1. 在[天地图官网](https://www.tianditu.gov.cn/)注册并登录账号，按页面提示完成账号认证。
+2. 打开[天地图控制台](https://console.tianditu.gov.cn/api/key)，进入应用管理，选择创建新应用。
+3. 填写应用名称（例如 `Lap`）等信息，应用类型选择 **浏览器端**，提交后复制生成的 **Key**。
+4. 在 Lap 的 **设置 → 高级 → 地图** 中，将地图服务提供者设为 **中国（天地图）**，把 Key 粘贴到 **天地图 API Token**，按 Enter 或点击输入框外保存。
+5. 返回地图视图，即可加载天地图底图。地图底图需要联网获取。
+
+申请类型可参考 [QGIS 天地图插件的说明](https://github.com/liuxspro/qgis-plugin-tianditu#使用说明)；控制台页面和认证要求以天地图官方为准。
 
 ## 元数据、合集与文件移动
 
@@ -130,11 +145,13 @@ Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$env:APPDATA\com.july
 
 ### Linux
 
-对于基于 Debian 的发行版，请卸载软件包：
+使用 DEB 安装的用户，请卸载软件包：
 
 ```bash
 sudo apt remove lap
 ```
+
+使用 AppImage 的用户，请退出 Lap 并删除下载的 `.AppImage` 文件。
 
 然后删除所有 Lap 数据库、缓存和配置文件：
 
@@ -170,6 +187,8 @@ cd src-vite && pnpm install && cd ..
 cargo tauri dev
 ```
 
+发行版软件包可以链接系统 libheif（1.17 或更新版本），而不使用内置的 libheif 和 libde265。构建时设置 `LAP_SYSTEM_LIBHEIF=1`。这样就无需 `third_party/libheif` 和 `third_party/libde265` 这两个子模块。HEVC 解码取决于系统 libheif 的编解码插件。
+
 ## 支持格式
 
 Lap 支持 60+ 种照片、RAW 和视频格式。
@@ -180,9 +199,9 @@ Lap 支持 60+ 种照片、RAW 和视频格式。
 | RAW 照片 | CR2, CR3, CRW, NEF, NRW, ARW, SRF, SR2, RAF, RW2, ORF, PEF, DNG, SRW, RWL, MRW, 3FR, MOS, DCR, KDC, ERF, MEF, RAW, MDC |
 | 视频 | MP4, MOV, M4V, MKV, AVI, FLV, TS/M2TS, WMV, WebM, 3GP/3G2, F4V, VOB, MPG/MPEG, ASF, DIVX 等。所有平台均支持 H.264 播放；在不支持原生播放时，系统会自动进行兼容性处理。macOS 原生支持 HEVC/H.265 和 VP9。 |
 
-### Linux 视频播放备注
+### Linux 视频播放
 
-在 Linux Mint/Ubuntu/Debian 上，请安装以下软件包以获得更好的视频播放支持：
+Lap 使用系统 GStreamer 插件播放视频，AppImage 版本也不例外。如果在 Ubuntu、Debian 或 Linux Mint 上无法播放视频，请安装：
 
 ```bash
 sudo apt install gstreamer1.0-libav gstreamer1.0-plugins-good
@@ -212,3 +231,7 @@ sudo apt install gstreamer1.0-libav gstreamer1.0-plugins-good
 ## 开源许可证
 
 GPL-3.0-or-later。详情请参阅 [LICENSE](../LICENSE)。
+
+## 隐私
+
+有关数据处理和可选在线服务的详情，请参阅[隐私政策](../PRIVACY.md)。

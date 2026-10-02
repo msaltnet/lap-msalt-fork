@@ -1,6 +1,7 @@
 <template>
+  <Teleport to="body" :disabled="!previewFullScreen">
   <div 
-    :class="['w-full relative flex flex-col items-center justify-center', toolbarOnly ? '' : 'h-full group']"
+    :class="['w-full flex flex-col items-center justify-center', previewFullScreen ? 'fixed inset-0 z-[200]' : 'relative', isFullScreen ? 'bg-base-200' : '', toolbarOnly ? '' : 'h-full group']"
     :style="toolbarOnly ? undefined : viewBackgroundStyle"
     @mousemove="handleMouseMove"
     @mouseleave="handleMouseLeave"
@@ -161,7 +162,7 @@
             :icon="IconRotate"
             :disabled="fileIndex < 0 || isSlideShow || !canInteract"
             :iconStyle="{ transform: `rotate(${file?.rotate ?? 0}deg)`, transition: 'transform 0.3s' }"
-            :selected="file?.rotate % 360 > 0 && !isSlideShow"
+            :selected="(file?.rotate ?? 0) % 360 !== 0 && !isSlideShow"
             :tooltip="$t('menu.meta.rotate')"
             :shortcut="shortcut('meta.rotate')"
             @click="$emit('item-action', { action: 'rotate', index: fileIndex })"
@@ -195,20 +196,19 @@
         />
         <IconSeparator v-if="mode !== 2" class="t-icon-size-sm text-base-content/30" />
         <TButton
-          v-if="mode === 2"
           :icon="!isFullScreen ? IconFullScreen : IconRestoreScreen"
           :tooltip="!isFullScreen ? $t('image_viewer.toolbar.fullscreen') : $t('image_viewer.toolbar.exit_fullscreen')"
           :disabled="!canInteract"
-          @click="$emit('toggle-full-screen')"
+          @click="toggleFullScreen"
         />
         <TButton v-if="mode !== 2 && !isFullScreen"
           :icon="config.mediaViewer.isPinned ? IconPin : IconUnPin"
           :disabled="fileIndex < 0 || !canInteract"
           :tooltip="!config.mediaViewer.isPinned ? $t('image_viewer.toolbar.pin') : $t('image_viewer.toolbar.unpin')"
-          @click="config.mediaViewer.isPinned = !config.mediaViewer.isPinned"
+          @click="toggleToolbarPin"
         />
         <TButton
-          v-if="mode === 0 && config.mediaViewer.isPinned"
+          v-if="isFullScreen || (mode === 0 && config.mediaViewer.isPinned)"
           :icon="IconClose"
           :tooltip="$t('image_viewer.toolbar.close')"
           :disabled="!canInteract"
@@ -229,7 +229,6 @@
       />
       <IconClose 
         class="p-3 w-12 h-10 text-base-content/70 hover:text-base-content hover:bg-red-500 transition-colors duration-300 cursor-pointer" 
-        @mousedown.stop="$emit('close')"
         @click.stop="$emit('close')" 
       />
     </div>
@@ -283,14 +282,18 @@
             :style="badge.iconStyle"
           />
           <span v-if="badge.label" class="leading-none">{{ badge.label }}</span>
+          <component
+            v-if="badge.trailingIcon"
+            :is="badge.trailingIcon"
+            :class="['h-3.5 w-3.5 shrink-0', badge.trailingIconClass]"
+          />
         </div>
       </div>
 
       <!-- Previous Button (Overlay, media-area anchored) -->
       <button
-        v-if="!isSlideShow && showOverlayNav"
-        class="absolute left-2 -translate-y-1/2 z-70 p-2 rounded-full bg-base-100/30 backdrop-blur-md transition-opacity duration-200"
-        :style="{ top: navButtonsTop }"
+        v-if="!isSlideShow && (showOverlayNav || previewFullScreen)"
+        class="absolute left-2 top-1/2 -translate-y-1/2 z-70 p-2 rounded-full bg-base-100/30 backdrop-blur-md transition-opacity duration-200"
         :class="[
           isHoverLeft ? (hasPrevious ? 'opacity-100 pointer-events-auto hover:text-base-content hover:bg-base-100/80 cursor-pointer' : 'opacity-30 cursor-default') : 'opacity-0 pointer-events-none'
         ]"
@@ -303,9 +306,8 @@
 
       <!-- Next Button (Overlay, media-area anchored) -->
       <button
-        v-if="!isSlideShow && showOverlayNav"
-        class="absolute right-2 -translate-y-1/2 z-70 p-2 rounded-full bg-base-100/30 backdrop-blur-md transition-opacity duration-200"
-        :style="{ top: navButtonsTop }"
+        v-if="!isSlideShow && (showOverlayNav || previewFullScreen)"
+        class="absolute right-2 top-1/2 -translate-y-1/2 z-70 p-2 rounded-full bg-base-100/30 backdrop-blur-md transition-opacity duration-200"
         :class="[
           isHoverRight ? (hasNext ? 'opacity-100 pointer-events-auto hover:text-base-content hover:bg-base-100/80 cursor-pointer' : 'opacity-30 cursor-default') : 'opacity-0 pointer-events-none'
         ]"
@@ -317,7 +319,7 @@
       </button>
 
       <div
-        v-if="isLivePhoto"
+        v-if="isLivePhotoLike"
         :class="[
           'absolute inset-0 z-10 transition-opacity duration-150',
           isLivePhotoPlaying ? 'opacity-100' : 'pointer-events-none opacity-0',
@@ -325,7 +327,7 @@
       >
         <Video
           class="h-full w-full"
-          :filePath="file?.live_photo_video_path"
+          :filePath="livePhotoVideoPath"
           :rotate="file?.rotate ?? 0"
           :isZoomFit="isZoomFit"
           :isSlideShow="isSlideShow"
@@ -334,8 +336,6 @@
           :viewportState="livePhotoViewport"
           :showControls="false"
           :showPlayOverlay="false"
-          @scale="(e) => $emit('scale', e)"
-          @viewport-change="(e) => $emit('viewport-change', e)"
           @message-from-video-viewer="handleMessageFromImageViewer"
           @slideshow-next="emit('slideshow-next')"
           @context-menu="handleContextMenu"
@@ -348,10 +348,10 @@
       <div
         v-if="file?.file_type === 1 || file?.file_type === 3"
         :class="[
-          isLivePhoto
+          isLivePhotoLike
             ? 'absolute inset-0 z-20 transition-opacity duration-150'
             : 'contents',
-          isLivePhoto && (isLivePhotoPlaying ? 'pointer-events-none opacity-0' : 'opacity-100'),
+          isLivePhotoLike && (isLivePhotoPlaying ? 'pointer-events-none opacity-0' : 'opacity-100'),
         ]"
       >
         <Image
@@ -359,6 +359,7 @@
           :filePath="file?.file_path"
           :fileId="file?.id"
           :fileType="file?.file_type"
+          :rawPairPath="file?.media_subtype === 'raw_jpeg_pair' ? file?.live_photo_video_path : ''"
           :fileVersion="file?.modified_at || 0"
           :imageWidth="file?.width"
           :imageHeight="file?.height"
@@ -382,7 +383,7 @@
       </div>
 
       <button
-        v-if="isLivePhoto"
+        v-if="isLivePhotoLike"
         class="absolute left-4 bottom-4 z-60 inline-flex h-10 items-center gap-2 rounded-box bg-base-100/70 px-3 text-sm font-medium text-base-content/70 shadow hover:bg-base-100 hover:text-base-content cursor-pointer"
         @mouseenter="startLivePhotoPreview"
         @mouseleave="isLivePhotoPlaying = false"
@@ -390,7 +391,7 @@
         @dblclick.stop
       >
         <IconLivePhoto class="h-4 w-4" />
-        <span>LIVE</span>
+        <span class="text-xs font-semibold uppercase tracking-wider leading-none">{{ isLivePhoto ? t('image_viewer.live') : t('image_viewer.motion') }}</span>
       </button>
 
       <div
@@ -428,16 +429,19 @@
       <template #trigger><span /></template>
     </ContextMenu>
   </div>
+  </Teleport>
 </template>
 
 <script setup lang="ts">
 import { defineAsyncComponent, ref, computed, watch, onMounted, onBeforeUnmount, type Component, type CSSProperties } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { runPreviewWindowOperation, recoverPreviewWindowFocus } from '@/common/previewWindow';
 import { config, libConfig } from '@/common/config';
 import { useToast } from '@/common/toast';
 import { isWin, isMac, isLinux, getSlideShowInterval } from '@/common/utils';
 import { getShortcutLabel, ShortcutActionId, ShortcutPlatform, VIEW_BACKGROUND_SHORTCUTS } from '@/common/shortcuts';
+import { getMotionPhotoVideoPath } from '@/common/api';
 
 import Image from '@/components/Image.vue';
 import TButton from '@/components/TButton.vue';
@@ -593,9 +597,20 @@ const props = defineProps({
 
 const isLivePhotoPlaying = ref(false);
 const isLivePhoto = computed(() => props.file?.media_subtype === 'live_photo' && !!props.file?.live_photo_video_path);
+const isMotionPhoto = computed(() => props.file?.media_subtype === 'motion_photo');
+// Both Apple Live Photos and Android Motion Photos play a short video layered
+// over the still image, so they share the same UI/playback path.
+const isLivePhotoLike = computed(() => isLivePhoto.value || isMotionPhoto.value);
+const motionPhotoVideoPath = ref<string | null>(null);
+const livePhotoVideoPath = computed(() =>
+  isLivePhoto.value ? props.file?.live_photo_video_path : motionPhotoVideoPath.value,
+);
 const livePhotoViewport = ref<Record<string, number | boolean> | null>(null);
+let motionPhotoVideoRequestSeq = 0;
 
 function startLivePhotoPreview() {
+  if (!livePhotoVideoPath.value) return;
+  emit('activate');
   const viewport = mediaRef.value?.getViewportState?.();
   // Preserve the still image's visible region for the Live Photo preview.
   // Video.applyViewportState() remaps that normalized viewport to the video's
@@ -607,11 +622,28 @@ function startLivePhotoPreview() {
 }
 
 watch(
-  () => [props.file?.id, props.file?.live_photo_video_path],
-  () => {
+  () => [props.file?.id, props.file?.media_subtype, props.file?.modified_at],
+  async ([fileId, mediaSubtype]) => {
+    const requestSeq = ++motionPhotoVideoRequestSeq;
     isLivePhotoPlaying.value = false;
     livePhotoViewport.value = null;
+    motionPhotoVideoPath.value = null;
+    // For Motion Photos the embedded MP4 has to be extracted (cached) before
+    // the generic video pipeline can play it.
+    if (mediaSubtype === 'motion_photo' && fileId != null) {
+      try {
+        const path = await getMotionPhotoVideoPath(fileId);
+        if (requestSeq === motionPhotoVideoRequestSeq) {
+          motionPhotoVideoPath.value = path;
+        }
+      } catch (error) {
+        if (requestSeq === motionPhotoVideoRequestSeq) {
+          console.error('Failed to prepare motion photo video:', error);
+        }
+      }
+    }
   },
+  { immediate: true },
 );
 
 const emit = defineEmits([
@@ -628,6 +660,7 @@ const emit = defineEmits([
   'media-dblclick', 
   'viewport-change',
   'view-background-change',
+  'activate',
 ]);
 
 const { locale, messages, t } = useI18n();
@@ -645,7 +678,6 @@ const isHoverTop = ref(false);
 const isHoverBottom = ref(false);
 const toolbarPosition = ref<'top' | 'bottom'>('top');
 const hasOpenMenu = ref(false);
-const navButtonsTop = ref('50%');
 
 // Responsive toolbar
 const containerWidth = ref(0);
@@ -661,6 +693,104 @@ const filenameMaxWidth = computed(() => {
 const showExtraIcons = computed(() => containerWidth.value > 600);
 // Window control state (Windows + ImageViewer mode)
 const showDesktopWindowControls = isWin || isLinux;
+// Preview owns its fullscreen session; the standalone viewer delegates to its window.
+const previewFullScreen = ref(false);
+const isFullScreen = computed(() => props.isFullScreen || previewFullScreen.value);
+let fullscreenBusy = false;
+let previewDisposed = false;
+let windowWasFullScreen = false;
+let windowWasMaximized = false;
+let unlistenPreviewResize: (() => void) | undefined;
+function stopPreviewResizeListener() {
+  unlistenPreviewResize?.();
+  unlistenPreviewResize = undefined;
+}
+
+async function restorePreviewWindow() {
+  const appWindow = getCurrentWindow();
+  if (!windowWasFullScreen) {
+    if (await appWindow.isFullscreen()) await appWindow.setFullscreen(false);
+    if (isWin && windowWasMaximized) {
+      await new Promise(resolve => setTimeout(resolve, 80));
+      await appWindow.maximize();
+    }
+  }
+  await recoverPreviewWindowFocus();
+}
+
+async function exitPreviewFullScreen() {
+  return runPreviewWindowOperation(async (cancelFocusRecovery) => {
+    if (!previewFullScreen.value) return;
+    cancelFocusRecovery();
+    fullscreenBusy = true;
+    try {
+      await restorePreviewWindow();
+      previewFullScreen.value = false;
+      // Closing a preview restores the window without forgetting its viewing mode.
+      if (!previewDisposed) config.mediaViewer.isFullScreen = false;
+      stopPreviewResizeListener();
+    } catch (error) {
+      console.error('Failed to exit preview fullscreen', error);
+    } finally {
+      fullscreenBusy = false;
+    }
+  });
+}
+
+async function toggleFullScreen() {
+  if (props.mode === 2) {
+    emit('toggle-full-screen');
+    return;
+  }
+  if (fullscreenBusy) return;
+  if (previewFullScreen.value) return exitPreviewFullScreen();
+  fullscreenBusy = true;
+  return runPreviewWindowOperation(async (cancelFocusRecovery) => {
+    if (previewDisposed) { fullscreenBusy = false; return; }
+    cancelFocusRecovery();
+    stopPreviewResizeListener();
+    const appWindow = getCurrentWindow();
+    let capturedWindowState = false;
+    try {
+      windowWasFullScreen = await appWindow.isFullscreen();
+      windowWasMaximized = await appWindow.isMaximized();
+      capturedWindowState = true;
+      if (!windowWasFullScreen) {
+        if (isWin && windowWasMaximized) {
+          await appWindow.unmaximize();
+          await new Promise(resolve => setTimeout(resolve, 80));
+        }
+        await appWindow.setFullscreen(true);
+      }
+      if (previewDisposed) {
+        await restorePreviewWindow();
+        return;
+      }
+      previewFullScreen.value = true;
+      unlistenPreviewResize = await appWindow.onResized(async () => {
+        if (!fullscreenBusy && previewFullScreen.value && !(await appWindow.isFullscreen())) {
+          void exitPreviewFullScreen();
+        }
+      });
+      if (previewDisposed) {
+        unlistenPreviewResize?.();
+        await restorePreviewWindow();
+      } else {
+        config.mediaViewer.isFullScreen = true;
+      }
+    } catch (error) {
+      console.error('Failed to enter preview fullscreen', error);
+      unlistenPreviewResize?.();
+      if (capturedWindowState) {
+        await restorePreviewWindow().catch(error => console.error('Failed to restore preview window', error));
+      }
+      previewFullScreen.value = false;
+    } finally {
+      fullscreenBusy = false;
+    }
+  });
+}
+
 const desktopAppWindow = showDesktopWindowControls ? getCurrentWindow() : null;
 const isMaximized = ref(false);
 
@@ -695,7 +825,10 @@ const viewBackgroundSwatches: CSSProperties[] = [
   ...viewBackgroundColors.slice(1).map(backgroundColor => ({ backgroundColor })),
 ];
 const viewBackgroundStyle = computed(() => {
-  return { backgroundColor: viewBackgroundColors[Number(config.settings.viewBackground ?? 0)] ?? viewBackgroundColors[0] };
+  const backgroundColor = viewBackgroundColors[Number(config.settings.viewBackground ?? 0)] ?? viewBackgroundColors[0];
+  return isFullScreen.value && backgroundColor === 'transparent'
+    ? undefined
+    : { backgroundColor };
 });
 const viewBackgroundMenuItems = computed(() => {
   const labels = localeMsg.value.settings.image_view.view_background_options || [];
@@ -811,6 +944,8 @@ type StatusBadge = {
   label?: string;
   iconClass?: string;
   iconStyle?: CSSProperties;
+  trailingIcon?: Component;
+  trailingIconClass?: string;
 };
 
 const normalizedFileRotate = computed(() => {
@@ -820,23 +955,19 @@ const normalizedFileRotate = computed(() => {
 
 const quickViewStatusBadges = computed<StatusBadge[]>(() => {
   const badges: StatusBadge[] = [];
+  const metaIcons: StatusBadge['icons'] = [];
   const rating = Number(props.file?.rating || 0);
   const cullingFlag = Number(props.file?.culling_flag ?? props.file?.cullingFlag ?? 0);
-  const metaIcons: StatusBadge['icons'] = [];
-
-  if (cullingFlag === 1) {
-    badges.push({
-      key: 'culling-pick',
-      icon: IconFlagFilled,
-      iconClass: 'text-primary',
-    });
-  } else if (cullingFlag === 2) {
-    badges.push({
-      key: 'culling-reject',
-      icon: IconFlagOff,
-      iconClass: 'text-error',
-    });
-  }
+  const cullingIcon = cullingFlag === 1
+    ? IconFlagFilled
+    : cullingFlag === 2
+      ? IconFlagOff
+      : undefined;
+  const cullingIconClass = cullingFlag === 1
+    ? 'text-primary'
+    : cullingFlag === 2
+      ? 'text-error'
+      : undefined;
 
   if (props.file?.is_favorite) {
     badges.push({
@@ -844,6 +975,8 @@ const quickViewStatusBadges = computed<StatusBadge[]>(() => {
       icon: IconHeartFilled,
       iconClass: 'text-error',
       label: rating > 0 ? `${rating}` : undefined,
+      trailingIcon: cullingIcon,
+      trailingIconClass: cullingIconClass,
     });
   } else if (rating > 0) {
     badges.push({
@@ -851,33 +984,29 @@ const quickViewStatusBadges = computed<StatusBadge[]>(() => {
       icon: IconStarFilled,
       iconClass: 'text-warning',
       label: `${rating}`,
+      trailingIcon: cullingIcon,
+      trailingIconClass: cullingIconClass,
+    });
+  } else if (cullingIcon) {
+    badges.push({
+      key: cullingFlag === 1 ? 'culling-pick' : 'culling-reject',
+      icon: cullingIcon,
+      iconClass: cullingIconClass,
     });
   }
-
-  if (props.file?.has_tags) {
-    metaIcons.push({ icon: IconTag });
-  }
-
-  if (props.file?.comments?.length > 0) {
-    metaIcons.push({ icon: IconComment });
-  }
-
+  if (props.file?.has_tags) metaIcons.push({ icon: IconTag });
+  if (props.file?.has_collections) metaIcons.push({ icon: IconBookmark });
+  if (props.file?.comments?.length > 0) metaIcons.push({ icon: IconComment });
   if (normalizedFileRotate.value > 0) {
     metaIcons.push({
       icon: IconRotate,
-      style: {
-        transform: `rotate(${normalizedFileRotate.value}deg)`,
-      },
+      style: { transform: `rotate(${normalizedFileRotate.value}deg)` },
     });
   }
-
   if (metaIcons.length > 0) {
-    const visibleIcons = metaIcons.slice(0, 3);
-    const extraCount = metaIcons.length - visibleIcons.length;
     badges.push({
       key: 'meta',
-      icons: visibleIcons,
-      label: extraCount > 0 ? `+${extraCount}` : undefined,
+      icons: metaIcons,
     });
   }
 
@@ -885,27 +1014,13 @@ const quickViewStatusBadges = computed<StatusBadge[]>(() => {
 });
 
 const showStatusBadges = computed(() => {
-  return props.mode === 0 || props.mode === 1 || props.mode === 2;
+  return !isFullScreen.value && (props.mode === 0 || props.mode === 2);
 });
 
 const showWindowControlsBar = computed(() => {
   return props.showToolbar && !(showDesktopWindowControls && props.mode === 2 && props.isFullScreen);
 });
 let resizeObserver: ResizeObserver | null = null;
-const updateNavButtonsTop = () => {
-  if (!containerRef.value || !mediaAreaRef.value) {
-    navButtonsTop.value = '50%';
-    return;
-  }
-  const containerRect = containerRef.value.getBoundingClientRect();
-  const mediaRect = mediaAreaRef.value.getBoundingClientRect();
-  if (containerRect.height <= 0 || mediaRect.height <= 0) {
-    navButtonsTop.value = '50%';
-    return;
-  }
-  const centerY = mediaRect.top - containerRect.top + mediaRect.height / 2;
-  navButtonsTop.value = `${Math.round(centerY)}px`;
-};
 
 onMounted(() => {
   resizeObserver = new ResizeObserver((entries) => {
@@ -916,28 +1031,38 @@ onMounted(() => {
         buttonsWidth.value = entry.contentRect.width;
       }
     }
-    updateNavButtonsTop();
   });
 
   if (containerRef.value) {
     resizeObserver.observe(containerRef.value);
   }
-  if (mediaAreaRef.value) {
-    resizeObserver.observe(mediaAreaRef.value);
-  }
   if (buttonsRef.value) {
     resizeObserver.observe(buttonsRef.value);
   }
-  updateNavButtonsTop();
-  window.addEventListener('resize', updateNavButtonsTop);
+  // Restore on opening Quick Preview. Merely mounting the embedded filmstrip
+  // pane (including at app startup) must not take over the main window.
+  if (props.mode === 0 && config.mediaViewer.isFullScreen) {
+    void toggleFullScreen();
+  }
 });
 
 onBeforeUnmount(() => {
-  window.removeEventListener('resize', updateNavButtonsTop);
+  previewDisposed = true;
+  stopPreviewResizeListener();
+  void exitPreviewFullScreen();
   if (resizeObserver) {
     resizeObserver.disconnect();
   }
 });
+
+function toggleToolbarPin() {
+  if (config.mediaViewer.isPinned) {
+    toolbarPosition.value = config.mediaViewer.pinnedPosition === 'bottom' ? 'bottom' : 'top';
+  } else {
+    config.mediaViewer.pinnedPosition = toolbarPosition.value;
+  }
+  config.mediaViewer.isPinned = !config.mediaViewer.isPinned;
+}
 
 function handleMouseMove(e: MouseEvent) {
   if (!containerRef.value) return;
@@ -946,7 +1071,9 @@ function handleMouseMove(e: MouseEvent) {
   if (containerRect.width <= 0 || containerRect.height <= 0) return;
   const containerY = e.clientY - containerRect.top;
   const containerHeight = containerRect.height;
-  toolbarPosition.value = containerY < containerHeight * 0.5 ? 'top' : 'bottom';
+  if (!config.mediaViewer.isPinned) {
+    toolbarPosition.value = containerY < containerHeight * 0.5 ? 'top' : 'bottom';
+  }
 
   if (!mediaAreaRef.value) {
     isHoverTop.value = containerY < 60;
@@ -1001,7 +1128,7 @@ function cycleViewBackground() {
 const computedToolbarClass = computed(() => {
   const commonClasses = 'absolute z-80 h-10 flex flex-row items-center justify-center select-none';
 
-  if (props.isFullScreen && props.mode === 2) {
+  if (isFullScreen.value) {
     const floatingClasses = 'left-1/2 top-4 -translate-x-1/2 px-2 rounded-box bg-base-100/30 hover:bg-base-100/70 transition-[opacity,transform] duration-300 ease-in-out';
     return `${commonClasses} ${floatingClasses} ${(props.forceToolbarVisible || isHoverTop.value || hasOpenMenu.value) ? 'opacity-100' : 'opacity-0'}`;
   }
@@ -1009,7 +1136,10 @@ const computedToolbarClass = computed(() => {
   const isPinned = props.mode === 2 ? true : config.mediaViewer.isPinned;
 
   if (isPinned) {
-    // Fixed Top Bar
+    // Keep the edge where the floating toolbar was pinned.
+    if (props.mode !== 2 && config.mediaViewer.pinnedPosition === 'bottom') {
+      return `${commonClasses} relative bottom-0 left-0 w-full order-last`;
+    }
     return `${commonClasses} relative top-0 left-0 w-full`;
   } else {
     // Floating Hover Bar
@@ -1047,7 +1177,7 @@ const handleMenuOpenChange = (isOpen: boolean) => {
 const zoomIn = () => mediaRef.value?.zoomIn();
 const zoomOut = () => mediaRef.value?.zoomOut();
 const zoomActual = () => mediaRef.value?.zoomActual();
-const rotateRight = () => mediaRef.value?.rotateRight();
+const rotateView = (delta = 90) => mediaRef.value?.rotateView(delta);
 const togglePlay = () => mediaRef.value?.togglePlay?.();
 const getViewportState = () => mediaRef.value?.getViewportState?.();
 const applyViewportState = (viewport: any, silent = false) => mediaRef.value?.applyViewportState?.(viewport, silent);
@@ -1175,10 +1305,12 @@ const handleMessageFromImageViewer = (payload: { message: string }) => {
 };
 
 defineExpose({
+  isFullScreen,
+  exitPreviewFullScreen,
   zoomIn,
   zoomOut,
   zoomActual,
-  rotateRight,
+  rotateView,
   togglePlay,
   getViewportState,
   applyViewportState,

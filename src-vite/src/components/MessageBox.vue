@@ -1,5 +1,5 @@
 <template>
-  <ModalDialog :title="title" :width="400" @cancel="clickCancel">
+  <ModalDialog :title="title" :width="400" :position-key="positionKey" @cancel="clickCancel">
     <div v-if="message" class="text-sm whitespace-pre-line wrap-break-word select-none">
       {{ message }}
     </div>
@@ -52,15 +52,16 @@
       >{{ thirdText }}</button>
 
       <button v-if="cancelText.length > 0"
-        class="t-button-default" 
+        class="t-button-default"
+        :disabled="isLoading"
         @click="clickCancel"
       >{{ cancelText }}</button>
       
       <button 
-        :class="warningOk ? 't-button-error' : 't-button-primary'" 
-        :disabled="showInput && !isInputValid"
+        :class="warningOk ? 't-button-error' : 't-button-primary'"
+        :disabled="isLoading || (showInput && !isInputValid)"
         @click="clickOk"
-      >{{ OkText }}</button>
+      ><span v-if="isLoading" class="loading loading-spinner loading-xs mr-2"></span>{{ OkText }}</button>
     </div>
   </ModalDialog>
 </template>
@@ -136,6 +137,16 @@ const props = defineProps({
   checkboxChecked: {
     type: Boolean,
     default: false
+  },
+  isLoading: {
+    type: Boolean,
+    default: false
+  },
+  // Optional key for persisting dialog position across sessions.
+  // When empty, dialog always centers on mount (backward compatible).
+  positionKey: {
+    type: String,
+    default: ''
   }
 });
 
@@ -193,7 +204,7 @@ const validateInput = () => {
 };
 
 function handleKeyDown(event: KeyboardEvent) {
-  if (!uiStore.isInputActive('MessageBox')) return;
+  if (!uiStore.isInputActive('MessageBox') || props.isLoading) return;
 
   const { key } = event;
   const activeElement = document.activeElement;
@@ -216,6 +227,7 @@ function handleKeyDown(event: KeyboardEvent) {
 }
 
 const clickOk = () => {
+  if (props.isLoading) return;
   if(props.showInput) {
     if ( !props.needValidateInput || inputValue.value.trim().length > 0 && !inputErrorMessage.value) {
       emit('ok', inputValue.value);

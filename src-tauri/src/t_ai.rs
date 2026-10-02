@@ -12,12 +12,13 @@ use ort::{
 };
 use reqwest::header::{CONTENT_RANGE, RANGE, USER_AGENT};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::{
-    io::ErrorKind,
+    io::{ErrorKind, Read},
     path::{Path, PathBuf},
     sync::{
         Mutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -37,9 +38,13 @@ const MULTILINGUAL_TEXT_MODEL_URL: &str =
     "https://github.com/julyx10/lap-binaries/releases/download/models/text_model.onnx";
 const MULTILINGUAL_TOKENIZER_URL: &str =
     "https://github.com/julyx10/lap-binaries/releases/download/models/tokenizer.json";
+const MULTILINGUAL_CHECKSUMS_URL: &str =
+    "https://github.com/julyx10/lap-binaries/releases/download/models/sha256sums.txt";
 const MULTILINGUAL_RELEASE_API_URL: &str =
     "https://api.github.com/repos/julyx10/lap-binaries/releases/tags/models";
+const MULTILINGUAL_MODEL_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 static MULTILINGUAL_MODEL_DOWNLOAD_ID: AtomicU64 = AtomicU64::new(0);
+static MULTILINGUAL_MODEL_INSTALLING: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -77,6 +82,90 @@ struct TextModelPaths {
     tokenizer: PathBuf,
 }
 
+fn checksum_for_file(content: &str, expected_filename: &str) -> Result<String, String> {
+    for line in content.lines().filter(|line| !line.trim().is_empty()) {
+        let mut fields = line.split_whitespace();
+        let Some(hash) = fields.next() else {
+            return Err("Invalid multilingual model checksum file".to_string());
+        };
+        let Some(filename) = fields.next() else {
+            return Err("Invalid multilingual model checksum file".to_string());
+        };
+        if fields.next().is_some()
+            || hash.len() != 64
+            || !hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err("Invalid multilingual model checksum file".to_string());
+        }
+        if filename.trim_start_matches('*') == expected_filename {
+            return Ok(hash.to_ascii_lowercase());
+        }
+    }
+    Err(format!("Checksum file is missing {}", expected_filename))
+}
+
+struct MultilingualModelInstallGuard;
+
+impl MultilingualModelInstallGuard {
+    fn begin() -> Self {
+        MULTILINGUAL_MODEL_INSTALLING.store(true, Ordering::SeqCst);
+        Self
+    }
+}
+
+impl Drop for MultilingualModelInstallGuard {
+    fn drop(&mut self) {
+        MULTILINGUAL_MODEL_INSTALLING.store(false, Ordering::SeqCst);
+    }
+}
+
+fn file_sha256(path: &Path) -> Result<String, String> {
+    let mut file = std::fs::File::open(path)
+        .map_err(|e| format!("Failed to open {} for verification: {}", path.display(), e))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|e| format!("Failed to read {} for verification: {}", path.display(), e))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn restore_interrupted_multilingual_model(model_dir: &Path) {
+    if MULTILINGUAL_MODEL_INSTALLING.load(Ordering::SeqCst) || model_dir.exists() {
+        return;
+    }
+    let Some(parent) = model_dir.parent() else {
+        return;
+    };
+    let Some(model_name) = model_dir.file_name().and_then(|name| name.to_str()) else {
+        return;
+    };
+    let backup_prefix = format!("{}.backup.", model_name);
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return;
+    };
+    let Some(backup_dir) = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(&backup_prefix))
+        })
+    else {
+        return;
+    };
+    let _ = std::fs::rename(backup_dir, model_dir);
+}
+
 impl AiEngine {
     pub fn new() -> Self {
         Self {
@@ -96,7 +185,6 @@ impl AiEngine {
 
         let resource_dir = Self::resource_model_dir(app)?;
         let vision_model_path = resource_dir.join(t_common::AI_VISION_MODEL);
-
         // Load Vision Model
         if self.vision_model.is_none() {
             let vision_model = Self::load_session(&vision_model_path, "vision")?;
@@ -158,7 +246,12 @@ impl AiEngine {
 
     pub fn is_multilingual_model_available(app: &AppHandle) -> bool {
         Self::text_model_paths(app, ImageSearchTextModel::Multilingual)
-            .map(|paths| paths.model.exists() && paths.tokenizer.exists())
+            .map(|paths| {
+                if let Some(model_dir) = paths.model.parent() {
+                    restore_interrupted_multilingual_model(model_dir);
+                }
+                paths.model.exists() && paths.tokenizer.exists()
+            })
             .unwrap_or(false)
     }
 
@@ -179,6 +272,11 @@ impl AiEngine {
         }
 
         let paths = Self::text_model_paths(app, model)?;
+        if model == ImageSearchTextModel::Multilingual {
+            if let Some(model_dir) = paths.model.parent() {
+                restore_interrupted_multilingual_model(model_dir);
+            }
+        }
         if !paths.model.exists() || !paths.tokenizer.exists() {
             return Err(format!(
                 "Image search model files are missing for {:?}",
@@ -190,9 +288,33 @@ impl AiEngine {
             .map_err(|e| format!("Failed to load tokenizer from {:?}: {}", paths.tokenizer, e))?;
         let text_model = Self::load_session(&paths.model, "text")?;
 
+        let previous_text_model = self.text_model.take();
+        let previous_tokenizer = self.tokenizer.take();
+        let previous_model_kind = self.text_model_kind;
         self.tokenizer = Some(tokenizer);
         self.text_model = Some(text_model);
         self.text_model_kind = model;
+        if let Err(error) = self.ensure_embedding_dimensions_match() {
+            self.text_model = previous_text_model;
+            self.tokenizer = previous_tokenizer;
+            self.text_model_kind = previous_model_kind;
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn ensure_embedding_dimensions_match(&mut self) -> Result<(), String> {
+        if self.vision_model.is_none() {
+            return Ok(());
+        }
+        let text_dim = self.encode_text("__lap_embedding_probe__")?.len();
+        let vision_dim = self.run_vision_model(Array::zeros((1, 3, 224, 224)))?.len();
+        if text_dim != vision_dim {
+            return Err(format!(
+                "Image search model is incompatible with the bundled vision model (text dimension {}, vision dimension {}). Please select or download a compatible model.",
+                text_dim, vision_dim
+            ));
+        }
         Ok(())
     }
 
@@ -368,6 +490,39 @@ impl AiEngine {
 
 pub struct AiState(pub Mutex<AiEngine>);
 
+async fn verify_downloaded_file(
+    path: &Path,
+    expected_size: Option<u64>,
+    expected_sha256: &str,
+) -> Result<(), String> {
+    let metadata = tokio::fs::metadata(path)
+        .await
+        .map_err(|e| format!("Failed to inspect downloaded model file: {}", e))?;
+    if let Some(expected_size) = expected_size {
+        if metadata.len() != expected_size {
+            return Err(format!(
+                "Downloaded {} has unexpected size (expected {}, got {})",
+                path.display(),
+                expected_size,
+                metadata.len()
+            ));
+        }
+    }
+
+    let path = path.to_owned();
+    let hash_path = path.clone();
+    let digest = tokio::task::spawn_blocking(move || file_sha256(&hash_path))
+        .await
+        .map_err(|e| format!("Failed to verify downloaded model file: {}", e))??;
+    if digest != expected_sha256 {
+        return Err(format!(
+            "Downloaded {} failed integrity verification",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
 async fn get_remote_file_size(client: &reqwest::Client, url: &str) -> Option<u64> {
     let response = client
         .get(url)
@@ -424,7 +579,7 @@ async fn get_download_total_size(client: &reqwest::Client, files: &[(&str, &str,
     }
 
     let mut total_size = 0u64;
-    for (url, _, _) in files.iter() {
+    for (url, _, _) in files {
         match get_remote_file_size(client, url).await {
             Some(file_size) => total_size += file_size,
             None => return 0,
@@ -497,12 +652,26 @@ pub async fn download_multilingual_text_model(app: AppHandle) -> Result<(), Stri
         ),
     ];
     let client = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(3))
+        .connect_timeout(MULTILINGUAL_MODEL_CONNECT_TIMEOUT)
         .build()
         .map_err(|e| format!("Failed to create download client: {}", e))?;
+    let expected_total = get_download_total_size(&client, &files).await;
+    let checksums = client
+        .get(MULTILINGUAL_CHECKSUMS_URL)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to download multilingual model checksums: {}", e))?
+        .error_for_status()
+        .map_err(|e| format!("Failed to download multilingual model checksums: {}", e))?
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read multilingual model checksums: {}", e))?;
+    let files = files.map(|(url, filename, label)| {
+        checksum_for_file(&checksums, filename).map(|checksum| (url, filename, label, checksum))
+    });
+    let files = files.into_iter().collect::<Result<Vec<_>, String>>()?;
     let total_files = files.len() as f64;
     let mut downloaded_total = 0u64;
-    let expected_total = get_download_total_size(&client, &files).await;
     ensure_current_multilingual_download(download_id, &temp_dir)?;
 
     let _ = app.emit(
@@ -516,7 +685,7 @@ pub async fn download_multilingual_text_model(app: AppHandle) -> Result<(), Stri
         }),
     );
 
-    for (index, (url, filename, label)) in files.iter().enumerate() {
+    for (index, (url, filename, label, expected_sha256)) in files.iter().enumerate() {
         ensure_current_multilingual_download(download_id, &temp_dir)?;
         let response = client
             .get(*url)
@@ -568,9 +737,17 @@ pub async fn download_multilingual_text_model(app: AppHandle) -> Result<(), Stri
             );
         }
         file.flush().await.map_err(|e| e.to_string())?;
-        if downloaded == 0 {
-            return Err(format!("Downloaded {} is empty", filename));
-        }
+        drop(file);
+        verify_downloaded_file(
+            &path,
+            (content_length > 0).then_some(content_length),
+            expected_sha256,
+        )
+        .await
+        .map_err(|e| {
+            let _ = std::fs::remove_dir_all(&temp_dir);
+            e
+        })?;
 
         let progress = if expected_total > 0 {
             ((downloaded_total as f64 / expected_total as f64).min(1.0) * 100.0).round() as i64
@@ -601,19 +778,54 @@ pub async fn download_multilingual_text_model(app: AppHandle) -> Result<(), Stri
         return Err(format!("Downloaded text model is invalid: {}", e));
     }
 
-    tokio::fs::create_dir_all(&model_dir)
-        .await
-        .map_err(|e| e.to_string())?;
     ensure_current_multilingual_download(download_id, &temp_dir)?;
-    for (_, filename, _) in files {
-        let dest = model_dir.join(filename);
-        let temp = temp_dir.join(filename);
-        let _ = tokio::fs::remove_file(&dest).await;
-        tokio::fs::rename(temp, dest)
+    let _install_guard = MultilingualModelInstallGuard::begin();
+    let backup_dir = model_dir.with_extension(format!("backup.{}", download_id));
+    let _ = tokio::fs::remove_dir_all(&backup_dir).await;
+    let had_existing_model = model_dir.exists();
+    if had_existing_model {
+        tokio::fs::rename(&model_dir, &backup_dir)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| format!("Failed to prepare existing model for replacement: {}", e))?;
     }
-    let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+    if !is_current_multilingual_download(download_id) {
+        if had_existing_model {
+            let _ = tokio::fs::rename(&backup_dir, &model_dir).await;
+        }
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+        return Err("Download canceled".to_string());
+    }
+    if let Err(error) = tokio::fs::rename(&temp_dir, &model_dir).await {
+        if had_existing_model {
+            let _ = tokio::fs::rename(&backup_dir, &model_dir).await;
+        }
+        return Err(format!(
+            "Failed to install downloaded multilingual model: {}",
+            error
+        ));
+    }
+    if !is_current_multilingual_download(download_id) {
+        if had_existing_model {
+            if let Err(error) = tokio::fs::rename(&model_dir, &temp_dir).await {
+                return Err(format!(
+                    "Failed to cancel multilingual model installation: {}",
+                    error
+                ));
+            }
+            if let Err(error) = tokio::fs::rename(&backup_dir, &model_dir).await {
+                let _ = tokio::fs::rename(&temp_dir, &model_dir).await;
+                return Err(format!(
+                    "Failed to restore previous multilingual model: {}",
+                    error
+                ));
+            }
+            let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+        } else {
+            let _ = tokio::fs::remove_dir_all(&model_dir).await;
+        }
+        return Err("Download canceled".to_string());
+    }
+    let _ = tokio::fs::remove_dir_all(&backup_dir).await;
 
     let _ = app.emit(
         "image_search_model_download_progress",

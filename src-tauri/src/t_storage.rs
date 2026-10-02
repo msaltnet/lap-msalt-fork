@@ -10,6 +10,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Condvar, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 use zip::ZipWriter;
@@ -20,6 +21,31 @@ use crate::t_config::{self, AppConfig, Library, LibraryState};
 
 static DB_MIGRATION_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
+// Admission and draining share one lock so a connection cannot slip past migration.
+static ACTIVE_CONNECTIONS: Mutex<usize> = Mutex::new(0);
+static CONNECTIONS_RETURNED: Condvar = Condvar::new();
+
+pub(crate) struct DbConnectionLease;
+
+impl DbConnectionLease {
+    pub(crate) fn acquire() -> Result<Self, String> {
+        let mut active = ACTIVE_CONNECTIONS.lock().map_err(|e| e.to_string())?;
+        if is_db_migration_in_progress() {
+            return Err("Database storage migration is in progress.".into());
+        }
+        *active += 1;
+        Ok(Self)
+    }
+}
+
+impl Drop for DbConnectionLease {
+    fn drop(&mut self) {
+        let mut active = ACTIVE_CONNECTIONS.lock().unwrap_or_else(|e| e.into_inner());
+        *active -= 1;
+        CONNECTIONS_RETURNED.notify_all();
+    }
+}
+
 struct DbMigrationGuard;
 
 impl DbMigrationGuard {
@@ -27,7 +53,16 @@ impl DbMigrationGuard {
         DB_MIGRATION_IN_PROGRESS
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .map_err(|_| "Database storage migration is already in progress.".to_string())?;
-        Ok(Self)
+        let guard = Self;
+        let active = ACTIVE_CONNECTIONS.lock().map_err(|e| e.to_string())?;
+        let (active, _) = CONNECTIONS_RETURNED
+            .wait_timeout_while(active, Duration::from_secs(5), |count| *count > 0)
+            .map_err(|e| e.to_string())?;
+        if *active > 0 {
+            return Err("Database is busy. Please retry after current operations finish.".into());
+        }
+        crate::t_sqlite::clear_conn_pool();
+        Ok(guard)
     }
 }
 
@@ -89,7 +124,10 @@ pub fn get_current_db_path() -> Result<String, String> {
 }
 
 fn checkpoint_db(path: &Path) -> Result<(), String> {
-    if !path.exists() {
+    if !path
+        .try_exists()
+        .map_err(|e| format!("Failed to inspect database '{}': {}", path.display(), e))?
+    {
         return Ok(());
     }
 
@@ -100,8 +138,15 @@ fn checkpoint_db(path: &Path) -> Result<(), String> {
 
     let run_checkpoint = |mode: &str| -> Result<(), String> {
         let pragma = format!("PRAGMA wal_checkpoint({})", mode);
-        conn.query_row(&pragma, [], |_| Ok(()))
+        conn.query_row(&pragma, [], |row| row.get::<_, i64>(0))
             .map_err(|e| format!("Failed to checkpoint database with mode {}: {}", mode, e))
+            .and_then(|busy| {
+                if busy == 0 {
+                    Ok(())
+                } else {
+                    Err("Database checkpoint is busy. Please retry later.".into())
+                }
+            })
     };
 
     if let Err(truncate_err) = run_checkpoint("TRUNCATE") {
@@ -112,113 +157,111 @@ fn checkpoint_db(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-pub fn change_db_storage_dir(new_dir: &str) -> Result<String, String> {
-    let _migration_guard = DbMigrationGuard::acquire()?;
-    let mut config = t_config::load_app_config()?;
-    let target_dir = PathBuf::from(new_dir);
-
-    fs::create_dir_all(&target_dir)
-        .map_err(|e| format!("Failed to create target database directory: {}", e))?;
-
-    let current_dir = get_db_storage_dir_from_config(&config)?;
-    let current_dir_canon = fs::canonicalize(&current_dir).unwrap_or(current_dir.clone());
-    let target_dir_canon = fs::canonicalize(&target_dir).unwrap_or(target_dir.clone());
-    if current_dir_canon == target_dir_canon {
-        return Ok(target_dir_canon.to_string_lossy().into_owned());
-    }
-
-    for library in &config.libraries {
-        let source_path = PathBuf::from(get_library_db_path_from_config(&config, &library.id)?);
-        let target_path = target_dir.join(format!("{}.db", library.id));
-
-        if !source_path.exists() {
-            continue;
-        }
-
-        checkpoint_db(&source_path)?;
-
-        if target_path.exists() {
-            fs::remove_file(&target_path)
-                .map_err(|e| format!("Failed to replace existing target database: {}", e))?;
-        }
-
-        fs::copy(&source_path, &target_path)
-            .map_err(|e| format!("Failed to migrate database '{}': {}", library.name, e))?;
-    }
-
-    config.db_storage_dir = Some(target_dir_canon.to_string_lossy().into_owned());
-    t_config::save_app_config(&config)?;
-
-    for library in &config.libraries {
-        let source_path = PathBuf::from(current_dir.join(format!("{}.db", library.id)));
-        if source_path.exists() {
-            let _ = fs::remove_file(&source_path);
-        }
-        let wal_path = current_dir.join(format!("{}.db-wal", library.id));
-        if wal_path.exists() {
-            let _ = fs::remove_file(&wal_path);
-        }
-        let shm_path = current_dir.join(format!("{}.db-shm", library.id));
-        if shm_path.exists() {
-            let _ = fs::remove_file(&shm_path);
-        }
-    }
-
-    Ok(target_dir_canon.to_string_lossy().into_owned())
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DbStorageChangeResult {
+    pub path: String,
+    pub cleanup_warnings: Vec<String>,
 }
 
-pub fn reset_db_storage_dir() -> Result<String, String> {
+pub fn change_db_storage_dir(new_dir: &str) -> Result<DbStorageChangeResult, String> {
+    migrate_db_storage(Some(new_dir))
+}
+
+pub fn reset_db_storage_dir() -> Result<DbStorageChangeResult, String> {
+    migrate_db_storage(None)
+}
+
+fn migrate_db_storage(new_dir: Option<&str>) -> Result<DbStorageChangeResult, String> {
     let _migration_guard = DbMigrationGuard::acquire()?;
     let mut config = t_config::load_app_config()?;
-    let target_dir = t_config::get_libraries_dir()?;
+    let target_dir = match new_dir {
+        Some(dir) => PathBuf::from(dir),
+        None => t_config::get_libraries_dir()?,
+    };
+    fs::create_dir_all(&target_dir)
+        .map_err(|e| format!("Failed to create target database directory: {}", e))?;
     let current_dir = get_db_storage_dir_from_config(&config)?;
-    let current_dir_canon = fs::canonicalize(&current_dir).unwrap_or(current_dir.clone());
-    let target_dir_canon = fs::canonicalize(&target_dir).unwrap_or(target_dir.clone());
+    let current_dir = fs::canonicalize(&current_dir).map_err(|e| e.to_string())?;
+    let target_dir = fs::canonicalize(&target_dir).map_err(|e| e.to_string())?;
+    let path = target_dir.to_string_lossy().into_owned();
 
-    if current_dir_canon == target_dir_canon {
-        config.db_storage_dir = None;
-        t_config::save_app_config(&config)?;
-        return Ok(target_dir_canon.to_string_lossy().into_owned());
-    }
-
-    for library in &config.libraries {
-        let source_path = PathBuf::from(get_library_db_path_from_config(&config, &library.id)?);
-        let target_path = target_dir.join(format!("{}.db", library.id));
-
-        if !source_path.exists() {
-            continue;
+    let mut migrated_libraries = Vec::new();
+    if current_dir != target_dir {
+        for library in &config.libraries {
+            let source = current_dir.join(format!("{}.db", library.id));
+            if !source
+                .try_exists()
+                .map_err(|e| format!("Failed to inspect database '{}': {}", source.display(), e))?
+            {
+                continue;
+            }
+            checkpoint_db(&source)?;
+            copy_library_database(&source, &target_dir, &library.id)?;
+            migrated_libraries.push(library.clone());
         }
-
-        checkpoint_db(&source_path)?;
-
-        if target_path.exists() {
-            fs::remove_file(&target_path)
-                .map_err(|e| format!("Failed to replace existing target database: {}", e))?;
-        }
-
-        fs::copy(&source_path, &target_path)
-            .map_err(|e| format!("Failed to migrate database '{}': {}", library.name, e))?;
     }
-
-    config.db_storage_dir = None;
+    config.db_storage_dir = new_dir.map(|_| path.clone());
     t_config::save_app_config(&config)?;
 
-    for library in &config.libraries {
-        let source_path = PathBuf::from(current_dir.join(format!("{}.db", library.id)));
-        if source_path.exists() {
-            let _ = fs::remove_file(&source_path);
+    let cleanup_warnings = if current_dir != target_dir {
+        cleanup_old_databases(&current_dir, &migrated_libraries)
+    } else {
+        Vec::new()
+    };
+    Ok(DbStorageChangeResult {
+        path,
+        cleanup_warnings,
+    })
+}
+
+fn copy_library_database(source: &Path, target_dir: &Path, library_id: &str) -> Result<(), String> {
+    let target = target_dir.join(format!("{}.db", library_id));
+    // Finish copying before replacing the destination; keep the source on every failure.
+    let staged = target_dir.join(format!(".{}-{}.tmp", library_id, Uuid::new_v4()));
+    let result = (|| {
+        fs::copy(source, &staged)
+            .map_err(|e| format!("Failed to copy database '{}': {}", source.display(), e))?;
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&staged)
+            .and_then(|file| file.sync_all())
+            .map_err(|e| format!("Failed to flush database copy: {}", e))?;
+        for suffix in [".db-wal", ".db-shm", ".db"] {
+            let stale = target_dir.join(format!("{}{}", library_id, suffix));
+            match fs::remove_file(&stale) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(format!("Failed to replace '{}': {}", stale.display(), e)),
+            }
         }
-        let wal_path = current_dir.join(format!("{}.db-wal", library.id));
-        if wal_path.exists() {
-            let _ = fs::remove_file(&wal_path);
-        }
-        let shm_path = current_dir.join(format!("{}.db-shm", library.id));
-        if shm_path.exists() {
-            let _ = fs::remove_file(&shm_path);
+        fs::rename(&staged, &target)
+            .map_err(|e| format!("Failed to install database '{}': {}", target.display(), e))
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&staged);
+    }
+    result
+}
+
+fn cleanup_old_databases(directory: &Path, libraries: &[Library]) -> Vec<String> {
+    let mut warnings = Vec::new();
+    for library in libraries {
+        for suffix in [".db", ".db-wal", ".db-shm"] {
+            let source = directory.join(format!("{}{}", library.id, suffix));
+            if let Err(e) = fs::remove_file(&source) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    let warning = format!("{}: {}", source.display(), e);
+                    eprintln!(
+                        "Database migrated, but old file cleanup failed: {}",
+                        warning
+                    );
+                    warnings.push(warning);
+                }
+            }
         }
     }
-
-    Ok(target_dir_canon.to_string_lossy().into_owned())
+    warnings
 }
 
 // ============================================================================
@@ -526,4 +569,102 @@ fn resolve_unique_name(name: &str, existing: &std::collections::HashSet<String>)
         }
     }
     format!("{} ({})", name, rand::random::<u16>())
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::*;
+
+    struct TestDir(PathBuf);
+    impl TestDir {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!("lap-storage-test-{}", Uuid::new_v4()));
+            fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn migration_waits_for_connections_and_reopens_admission() {
+        let lease = DbConnectionLease::acquire().unwrap();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (finish_tx, finish_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let _guard = DbMigrationGuard::acquire().unwrap();
+            ready_tx.send(()).unwrap();
+            finish_rx.recv().unwrap();
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while !is_db_migration_in_progress() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        assert!(DbConnectionLease::acquire().is_err());
+        assert!(ready_rx.recv_timeout(Duration::from_millis(50)).is_err());
+        drop(lease);
+        ready_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(DbConnectionLease::acquire().is_err());
+        finish_tx.send(()).unwrap();
+        worker.join().unwrap();
+        let lease = DbConnectionLease::acquire().unwrap();
+        // A timed-out migration must also reopen admission without touching storage.
+        assert!(DbMigrationGuard::acquire().is_err());
+        assert!(!is_db_migration_in_progress());
+        drop(lease);
+        assert!(DbConnectionLease::acquire().is_ok());
+    }
+
+    #[test]
+    fn checkpoint_rejects_busy_database_then_copies_committed_data() {
+        let source_dir = TestDir::new();
+        let target_dir = TestDir::new();
+        let source = source_dir.0.join("default.db");
+        let writer = rusqlite::Connection::open(&source).unwrap();
+        writer
+            .execute_batch(
+                "PRAGMA journal_mode=WAL; CREATE TABLE test(value); INSERT INTO test VALUES (1);",
+            )
+            .unwrap();
+        let reader = rusqlite::Connection::open(&source).unwrap();
+        reader.execute_batch("BEGIN; SELECT * FROM test;").unwrap();
+        writer.execute("INSERT INTO test VALUES (2)", []).unwrap();
+        assert!(checkpoint_db(&source).is_err());
+        reader.execute_batch("ROLLBACK").unwrap();
+        checkpoint_db(&source).unwrap();
+        fs::write(target_dir.0.join("default.db-wal"), "stale").unwrap();
+        copy_library_database(&source, &target_dir.0, "default").unwrap();
+        assert!(source.exists());
+        assert!(!target_dir.0.join("default.db-wal").exists());
+        let copy = rusqlite::Connection::open(target_dir.0.join("default.db")).unwrap();
+        assert_eq!(
+            copy.query_row("SELECT COUNT(*) FROM test", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+    }
+
+    #[test]
+    fn copy_failure_keeps_source_and_cleanup_failure_is_reported() {
+        let source_dir = TestDir::new();
+        let target_dir = TestDir::new();
+        let source = source_dir.0.join("default.db");
+        fs::write(&source, "source data").unwrap();
+        // A metadata error (a file used as a directory) must not mean "missing".
+        assert!(checkpoint_db(&source.join("default.db")).is_err());
+        fs::create_dir(target_dir.0.join("default.db-wal")).unwrap();
+        assert!(copy_library_database(&source, &target_dir.0, "default").is_err());
+        assert_eq!(fs::read_to_string(&source).unwrap(), "source data");
+        assert_eq!(fs::read_dir(&target_dir.0).unwrap().count(), 1);
+        let libraries = AppConfig::default().libraries;
+        let warnings = cleanup_old_databases(&target_dir.0, &libraries);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("default.db-wal"));
+        assert!(cleanup_old_databases(&source_dir.0, &libraries).is_empty());
+        assert!(!source.exists());
+    }
 }

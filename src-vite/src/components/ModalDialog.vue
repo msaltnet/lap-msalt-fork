@@ -48,6 +48,12 @@ const props = defineProps({
   height: {
     type: Number,
     default: undefined // undefined means no height limit
+  },
+  // When provided, dialog position is persisted in localStorage under this key
+  // and restored on next mount. Without it, dialog always centers on mount.
+  positionKey: {
+    type: String,
+    default: ''
   }
 });
 
@@ -124,10 +130,50 @@ const centerDialog = () => {
   }
 };
 
+const POS_PREFIX = 'lap.dialog.pos.';
+// Guards against persisting the initial (0,0) if the dialog unmounts
+// before the nextTick positioning pass has run.
+let positionReady = false;
+
+const loadPosition = (): boolean => {
+  if (!props.positionKey) return false;
+  try {
+    const raw = localStorage.getItem(POS_PREFIX + props.positionKey);
+    if (!raw) return false;
+    const parsed = JSON.parse(raw);
+    if (typeof parsed?.x !== 'number' || typeof parsed?.y !== 'number') return false;
+    if (!Number.isFinite(parsed.x) || !Number.isFinite(parsed.y)) return false;
+    x.value = parsed.x;
+    y.value = parsed.y;
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const savePosition = () => {
+  if (!props.positionKey || !positionReady) return;
+  try {
+    localStorage.setItem(
+      POS_PREFIX + props.positionKey,
+      JSON.stringify({ x: Math.round(x.value), y: Math.round(y.value) })
+    );
+  } catch {
+    // ignore quota / private-mode errors
+  }
+};
+
 onMounted(() => {
   window.addEventListener('resize', clampPosition);
   nextTick(() => {
-    centerDialog(); // Center on mount
+    // Restore saved position if available, otherwise center.
+    // Either way, clamp to viewport to handle resolution / display changes.
+    if (!loadPosition()) {
+      centerDialog();
+    } else {
+      clampPosition();
+    }
+    positionReady = true;
   });
 });
 
@@ -138,6 +184,9 @@ onUnmounted(() => {
   if (isDragging.value) {
     dragEnd();
   }
+
+  // Persist final position once per dialog session (on close), not per drag.
+  savePosition();
 });
 
 const clampPosition = () => {

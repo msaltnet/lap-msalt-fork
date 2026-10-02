@@ -21,6 +21,7 @@ mod t_cmds;
 mod t_common;
 mod t_config;
 mod t_dedup;
+mod t_embedded_jpeg;
 mod t_face;
 mod t_heif;
 mod t_http;
@@ -29,7 +30,11 @@ mod t_jpeg;
 mod t_jxl;
 mod t_lens;
 mod t_libraw;
+mod t_raw_display;
 mod t_menu;
+mod t_migration;
+mod t_tag_groups;
+mod t_motion_photo;
 mod t_pasteboard;
 mod t_protocol;
 mod t_similar;
@@ -73,6 +78,9 @@ async fn main() {
         .manage(t_cmds::IndexCancellation(std::sync::Arc::new(
             std::sync::Mutex::new(std::collections::HashMap::new()),
         )))
+        .manage(t_cmds::ImportCancellation(std::sync::Arc::new(std::sync::Mutex::new(
+            t_cmds::ImportState::default(),
+        ))))
         .manage(t_face::FaceIndexCancellation(std::sync::Arc::new(
             std::sync::Mutex::new(false),
         )))
@@ -119,8 +127,10 @@ async fn main() {
             // Cleanup video cache
             t_video::init_video_cache(&_app.handle());
 
-            if let Err(e) = t_utils::restore_album_scopes(&_app.handle()) {
-                eprintln!("Failed to restore asset scopes: {}", e);
+            if !t_sqlite::is_database_corrupted() {
+                if let Err(e) = t_utils::restore_album_scopes(&_app.handle()) {
+                    eprintln!("Failed to restore asset scopes: {}", e);
+                }
             }
 
             // Initialize AI Engine
@@ -160,7 +170,9 @@ async fn main() {
                 }
             }
 
-            t_utils::start_folder_mtime_sync(_app.handle().clone());
+            if !t_sqlite::is_database_corrupted() {
+                t_utils::start_folder_mtime_sync(_app.handle().clone());
+            }
 
             // Open devtools in development mode
             // #[cfg(debug_assertions)] // only include this block in debug builds
@@ -215,6 +227,7 @@ async fn main() {
             t_cmds::get_app_config,
             t_cmds::get_supported_format_extensions,
             t_cmds::get_ffmpeg_backed_image_extensions,
+            t_cmds::check_gstreamer_available,
             t_cmds::set_last_selected_item_index,
             t_cmds::get_db_storage_dir,
             t_cmds::is_using_custom_db_storage,
@@ -226,15 +239,19 @@ async fn main() {
             t_cmds::hide_library,
             t_cmds::reorder_libraries,
             t_cmds::switch_library,
+            t_cmds::is_database_corrupted,
             t_cmds::get_library_info,
             t_cmds::save_library_state,
             t_cmds::get_library_state,
             t_cmds::get_current_library_state,
             // album
             t_cmds::get_all_albums,
+            t_cmds::get_all_album_folders,
             t_cmds::generate_directory_thumbnails,
             t_cmds::get_album,
+            t_cmds::check_album_accessibility,
             t_cmds::recount_album,
+            t_cmds::get_album_visible_counts,
             t_cmds::add_album,
             t_cmds::edit_album,
             t_cmds::remove_album,
@@ -248,6 +265,7 @@ async fn main() {
             t_cmds::select_folder,
             t_cmds::fetch_folder,
             t_cmds::count_folder,
+            t_cmds::list_album_subfolders,
             t_cmds::create_folder,
             t_cmds::rename_folder,
             t_cmds::move_folder,
@@ -257,17 +275,19 @@ async fn main() {
             t_cmds::delete_folder_permanently,
             t_cmds::reveal_path,
             t_cmds::open_external_url,
+            t_cmds::set_desktop_wallpaper,
             t_cmds::get_external_app_display_name,
             t_cmds::open_file_with_app,
             t_cmds::open_files_with_app,
             // file query
-            t_cmds::get_total_count_and_sum,
             t_cmds::get_query_count_and_sum,
             t_cmds::get_query_time_line,
             t_cmds::get_query_files,
             t_cmds::get_grouped_query_rows,
             t_cmds::get_group_file_ids,
+            t_cmds::get_grouped_file_position,
             t_cmds::get_query_file_ids,
+            t_cmds::get_library_visible_counts,
             t_cmds::get_query_file_position,
             // smart album
             t_cmds::get_smart_query_count_and_sum,
@@ -279,12 +299,14 @@ async fn main() {
             t_cmds::get_smart_query_file_position,
             // collection
             t_cmds::list_collections,
+            t_cmds::get_collection_counts,
             t_cmds::create_collection,
             t_cmds::rename_collection,
             t_cmds::delete_collection,
             t_cmds::reorder_collections,
             t_cmds::add_files_to_collection,
             t_cmds::remove_files_from_collection,
+            t_cmds::get_collection_selection_counts,
             t_cmds::clear_collection,
             t_cmds::get_collection_file_ids,
             t_cmds::get_file_collections,
@@ -294,8 +316,10 @@ async fn main() {
             t_cmds::get_collection_group_file_ids,
             t_cmds::get_collection_query_file_ids,
             // folder file query
+            t_cmds::get_files_by_ids,
             t_cmds::get_folder_files,
             t_cmds::sync_album_folder_mtimes,
+            t_cmds::refresh_album_subfolders,
             t_cmds::is_directory_accessible,
             t_cmds::get_folder_thumb_count,
             // file operations
@@ -307,6 +331,8 @@ async fn main() {
             t_cmds::move_file_outside_library,
             t_cmds::copy_file,
             t_cmds::import_file,
+            t_cmds::import_and_organize,
+            t_cmds::cancel_import_and_organize,
             t_cmds::import_url,
             t_cmds::import_from_drag,
             t_cmds::get_drag_payload,
@@ -319,11 +345,14 @@ async fn main() {
             t_cmds::batch_delete_files,
             // file metadata
             t_cmds::edit_file_comment,
+            t_cmds::clean_unused_thumbnail_cache,
             t_cmds::get_file_thumb,
             t_cmds::get_file_thumb_by_id,
             t_cmds::get_file_thumbs,
             t_cmds::get_file_info,
             t_cmds::update_file_info,
+            t_cmds::refresh_selected_file_info,
+            t_cmds::prepare_motion_photo_video,
             t_cmds::add_file_to_db,
             t_cmds::check_file_exists,
             t_cmds::set_file_rotate,
@@ -339,7 +368,14 @@ async fn main() {
             t_cmds::set_file_culling_flag,
             t_cmds::batch_update_file_metadata,
             // tag
+            t_cmds::get_tag_group_name,
+            t_cmds::get_tag_groups,
+            t_cmds::save_tag_group,
+            t_cmds::reorder_tag_groups,
+            t_cmds::delete_tag_group,
+            t_cmds::move_tags_to_group,
             t_cmds::get_all_tags,
+            t_cmds::get_tag_counts,
             t_cmds::get_tag_name,
             t_cmds::create_tag,
             t_cmds::rename_tag,
@@ -356,7 +392,7 @@ async fn main() {
             t_cmds::get_lens_info,
             // location
             t_cmds::get_location_info,
-            t_cmds::get_gps_heatmap_points,
+            t_cmds::get_gps_map_points,
             // settings
             t_cmds::get_package_info,
             t_cmds::get_build_time,
@@ -384,6 +420,7 @@ async fn main() {
             t_cmds::rename_person,
             t_cmds::delete_person,
             t_cmds::get_faces_for_file,
+            t_cmds::get_person_thumbnail,
             // dedup
             t_cmds::dedup_start_scan,
             t_cmds::dedup_get_scan_status,
@@ -391,13 +428,15 @@ async fn main() {
             t_cmds::dedup_list_groups,
             t_cmds::dedup_get_overview,
             t_cmds::dedup_set_keep,
-            t_cmds::dedup_delete_selected,
+            t_cmds::dedup_delete,
             t_cmds::similar_start_scan,
             t_cmds::similar_get_scan_status,
             t_cmds::similar_cancel_scan,
             t_cmds::similar_get_eligible_count,
             t_cmds::similar_list_groups,
+            t_cmds::similar_get_overview,
             t_cmds::similar_get_group,
+            t_cmds::similar_set_keep,
             t_cmds::similar_has_scan,
             // video
             t_video::prepare_video,
@@ -422,8 +461,8 @@ async fn main() {
                 tauri::RunEvent::Exit { .. } => {
                     if aptabase_enabled {
                         let _ = app_handle.track_event("app_exited", None);
+                        app_handle.flush_events_blocking();
                     }
-                    app_handle.flush_events_blocking();
                 }
 
                 // macOS: clicking the Dock icon of a running app reopens it.

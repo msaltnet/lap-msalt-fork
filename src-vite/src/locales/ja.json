@@ -10,16 +10,19 @@
     "location": "場所",
     "people": "人物",
     "camera": "カメラ",
-    "map": "マップ",
+    "map": "地図",
     "settings": "設定"
   },
   "collection": {
     "title": "コレクション",
-    "add": "コレクションを追加",
-    "add_to_collection": "コレクションに追加",
+    "add": "新規コレクション",
+    "edit_collections": "コレクションを編集",
     "recent": "最近使用したコレクション",
     "search": "コレクションを検索",
+    "enter_new_collection_name": "新しいコレクション名",
     "not_found": "コレクションが見つかりません",
+    "name_exists": "同じ名前のコレクションが既にあります",
+    "name_save_failed": "コレクション名を保存できませんでした",
     "default_name": "コレクション {index}",
     "expand": "展開",
     "collapse": "折りたたむ",
@@ -46,12 +49,19 @@
   "library": {
     "all_files": "すべてのファイル",
     "on_this_day": "この日",
-    "review": "レビュー"
+    "review": "レビュー",
+    "database_corrupted": "このライブラリのデータベースが破損しています",
+    "database_corrupted_hint": "他のライブラリに切り替えてみてください。"
   },
   "album": {
     "album_list": "アルバム",
+    "search_folders": "フォルダーを検索",
+    "favorite_folders_only": "お気に入りのフォルダーのみ",
+    "no_folders_found": "フォルダーが見つかりません",
     "smart_album_list": "スマートアルバム",
-    "add_smart_album": "スマートアルバムを追加",
+    "search_smart_albums": "スマートアルバムを検索",
+    "no_smart_albums_found": "スマートアルバムが見つかりません",
+    "add_smart_album": "新規スマートアルバム",
     "folder_unavailable": {
       "title": "フォルダーを利用できません",
       "description": "ストレージデバイスを再接続するか、フォルダーの場所を確認してください。"
@@ -61,7 +71,7 @@
       "description": "フォルダーが移動または削除された可能性があります。親フォルダーを更新してください。"
     },
     "edit": {
-      "title_add": "アルバムを追加",
+      "title_add": "新規アルバム",
       "title": "アルバムを編集",
       "folder": "フォルダー",
       "select_folder": "フォルダーを選択",
@@ -70,13 +80,44 @@
       "description_placeholder": "アルバムの説明を入力",
       "images": "写真",
       "videos": "動画",
-      "scanned_files": "スキャン済みファイル",
-      "files_to_scan": "スキャン対象ファイル",
+      "section_general": "一般",
+      "section_scan": "スキャンの状態",
+      "scanned_files": "スキャン済み",
+      "indexed_files": "インデックス済み",
+      "skipped_files": "スキップ済み",
+      "merged_files": "統合済み",
+      "failed_files": "失敗",
+      "files_to_scan": "スキャン待ち",
+      "scanning": "スキャン中",
+      "scanning_files": "{current}/{total} ファイル ({size})",
       "files_count": "{count} ファイル ({size})",
+      "files_count_without_size": "{count} ファイル",
+      "section_scan_preview": "スキャンのプレビュー",
+      "excluded_files": "除外済み",
+      "preview_updating": "更新中…",
+      "preview_unavailable": "スキャンのプレビューを取得できません",
       "files_counting": "ファイルを計算中...",
       "created_at": "作成日",
       "modified_at": "変更日",
-      "last_scan_time": "最終スキャン"
+      "last_scan_time": "最終スキャン",
+      "tab_general": "一般",
+      "file_types": "ファイル形式を除外",
+      "photos": "写真",
+      "raw": "RAW",
+      "file_types_required": "少なくとも1つのファイル形式を対象として残してください。",
+      "pixel_filter": "小さい画像を除外",
+      "filter_off": "オフ",
+      "pixel_hint": "幅と高さが両方ともこの値未満の画像を除外します。",
+      "excluded_folders": "フォルダーを除外",
+      "excluded_hint": "ルートフォルダー直下のサブフォルダーを選択すると、その中のすべての内容が除外されます。",
+      "search_folders": "フォルダーを検索",
+      "loading_folders": "フォルダーを読み込み中…",
+      "folders_unavailable": "フォルダーを読み込めません。保存済みの除外設定は保持されます。",
+      "no_subfolders": "直下にサブフォルダーがありません。",
+      "save_update": "保存して更新",
+      "save_failed": "アルバム設定を保存できませんでした。もう一度お試しください。",
+      "file_types_hint": "選択したファイル形式はこのアルバムから除外されます。",
+      "tab_exclusions": "除外設定"
     },
     "no_albums": {
       "title": "アルバムがありません",
@@ -86,8 +127,8 @@
       "description": "カスタムクエリ条件からスマートアルバムを作成できます。"
     },
     "smart_edit": {
-      "title_add": "スマートアルバムを追加",
-      "title_edit": "編集...",
+      "title_add": "新規スマートアルバム",
+      "title_edit": "スマートアルバムを編集",
       "reorder": "並べ替え",
       "name": "名前",
       "description": "説明",
@@ -134,8 +175,8 @@
         "location": "場所"
       },
       "media_subtypes": {
-        "live_photo": "Live Photo",
-        "raw_jpeg_pair": "RAWペア"
+        "raw_jpeg_pair": "RAWペア",
+        "live_motion_photos": "ライブフォトとモーションフォト"
       },
       "operators": {
         "is": "=",
@@ -182,19 +223,44 @@
       }
     }
   },
+  "import_organize": {
+    "section_folders": "フォルダーを選択",
+    "section_status": "インポート状況",
+    "to_import": "インポート予定",
+    "files_progress": "{processed} / {total} ファイル（{size}）",
+    "source": "読み込み元",
+    "source_placeholder": "読み込み元フォルダーを選択",
+    "destination": "保存先",
+    "folder_layout": "フォルダー構成",
+    "layout_day": "日別 — YYYY/YYYY-MM-DD",
+    "layout_month": "月別 — YYYY/YYYY-MM",
+    "layout_year": "年別 — YYYY",
+    "layout_none": "単一フォルダー",
+    "import": "読み込む",
+    "preparing": "読み込みを準備中",
+    "importing": "ファイルを読み込み中",
+    "complete": "読み込み完了",
+    "cancelled": "読み込みをキャンセルしました",
+    "continue": "続行",
+    "imported": "読み込み済み: {count}",
+    "skipped": "スキップ: {count}",
+    "failed": "失敗: {count}",
+    "error_nested": "ソースフォルダーと宛先フォルダーは互いに含めることはできません",
+    "error_destination_outside": "宛先フォルダーはアルバム内にある必要があります",
+    "error_source": "ソースフォルダーにアクセスできません",
+    "error_failed": "インポートに失敗しました: {message}"
+  },
   "welcome": {
-    "title": "Lap へようこそ",
-    "description": "あなたのローカルフォトライブラリ。高速で検索可能、常にあなたの管理下に。",
-    "add_album_title": "アルバムを追加して始める",
+    "add_album_title": "新しいアルバムから始めましょう",
     "add_album_description": "フォルダを選択して、Lapに写真と動画を整理させましょう。",
-    "search_title": "記憶で検索",
-    "search_description": "自然な言葉で検索し、類似写真を発見し、探しているものをすぐに見つけられます。",
-    "drag_title": "ドラッグしてインポート",
-    "drag_description": "ファイルマネージャーまたはブラウザからアルバムに直接写真をドラッグします。"
+    "smart_album_title": "スマートアルバムで整理",
+    "smart_album_description": "条件に合う写真をルールで自動的にまとめます。",
+    "collection_title": "コレクションで写真をまとめる",
+    "collection_description": "イベントやプロジェクトの写真をまとめ、いつでもドラッグして追加できます。元の写真は移動しません。"
   },
   "search": {
     "title": "検索",
-    "similar_images": "類似写真",
+    "similar_images": "関連写真",
     "image_search_placeholder": "画像、ファイル名、またはコメントを検索",
     "matches": "一致結果",
     "unknown_location": "不明な場所",
@@ -204,10 +270,11 @@
     "text_matches": "テキストの一致",
     "index": {
       "wait_index": "スキャン待機中",
-      "indexing": "スキャン中... {count} / {total}",
-      "discovering": "アルバムをスキャン中... {count} / {total}",
-      "preparing_previews": "プレビューを生成中... {count} / {total}",
-      "preparing_search": "検索インデックスを準備中... {count} / {total}",
+      "indexing": "スキャン中... {count}/{total}",
+      "scan_summary": "索引済み {indexed} · 未対応のためスキップ {skipped} · 失敗 {failed}",
+      "discovering": "アルバムをスキャン中... {count}/{total}",
+      "preparing_previews": "プレビューを生成中... {count}/{total}",
+      "preparing_search": "検索インデックスを準備中... {count}/{total}",
       "complete": "スキャン完了",
       "complete_with_issues": "スキャン完了（{count} 件の問題あり）",
       "paused": "スキャンを一時停止中",
@@ -264,12 +331,13 @@
   },
   "tag": {
     "title": "タグ",
-    "add_tag": "タグを追加",
     "delete_tag": "タグを削除",
     "edit_tag": "タグを編集",
     "search_tags": "タグを検索",
     "enter_new_tag_name": "新しいタグ名を入力",
     "not_found": "タグが見つかりません",
+    "name_exists": "同じ名前のタグが既にあります",
+    "name_save_failed": "タグ名を保存できませんでした",
     "load_failed": "タグの状態を読み込めませんでした。ダイアログを閉じて再試行してください。"
   },
   "subject": {
@@ -287,10 +355,11 @@
   },
   "calendar": {
     "title": "カレンダー",
-    "month_title": "月表示",
-    "day_title": "日表示",
-    "switch_to_month": "月表示に切替",
-    "switch_to_day": "日表示に切替",
+    "tabs": {
+      "years": "年",
+      "months": "月",
+      "days": "日"
+    },
     "day": "日",
     "week": "週",
     "month": "月",
@@ -373,7 +442,8 @@
         "名前",
         "サイズ",
         "寸法",
-        "長さ"
+        "長さ",
+        "ランダム"
       ],
       "similarity": "類似度",
       "sort_order_options": [
@@ -454,7 +524,7 @@
       "similar_title": "類似写真は次に対応予定です",
       "similar_desc": "完全一致の重複ワークフローを拡張した後、このタブは見た目が似ている写真に使われます。",
       "similar": {
-        "description": "現在の結果から視覚的に類似した写真を見つけます。",
+        "description": "現在の表示から似た写真を探します。",
         "analyze": "{count} 枚の写真を分析",
         "large_scan_confirm": "{count} 枚の写真を分析しますか？数分かかる場合があります。",
         "cancel": "キャンセル",
@@ -463,11 +533,13 @@
         "building_sets": "類似グループを作成中",
         "analyzing": "類似写真を分析中",
         "groups_title": "類似グループ",
+        "results": "結果",
         "groups_count": "類似グループ {count} 件",
         "load_more": "さらに読み込む",
         "error_title": "類似写真を読み込めません",
         "empty_title": "類似写真が見つかりません",
-        "analyze_confirm": "分析"
+        "analyze_confirm": "分析",
+        "reanalyze": "再分析"
       },
       "reclaimable_size": "削減可能",
       "groups_title": "重複グループ",
@@ -481,9 +553,14 @@
         "oldest_modified": "修正日が最も古いものを優先"
       },
       "keep_label": "保持",
+      "unkeep_label": "保持しない",
+      "delete_selected": "選択項目を削除",
+      "delete_all": "すべて削除",
       "move_selected_to_trash": "ゴミ箱に入れる（{count}件を選択 · {size}）",
+      "no_removable_files": "ゴミ箱に移動できる削除可能なファイルはありません",
       "set_keep": "保持",
-      "duplicate_files_summary": "重複 {count} 件（{size}）"
+      "removable_copies_summary": "削除可能なコピー {count} 件・{size}",
+      "similar_photos_summary": "{count} 枚の類似写真・{size}"
     }
   },
   "tooltip": {
@@ -492,8 +569,12 @@
       "person": "顔認識はベータ版のため、結果が正確でない場合があります。"
     },
     "not_found": {
-      "albums": "アルバムが見つかりません。写真や動画を含むフォルダーを追加してください",
+      "albums": "アルバムが見つかりません",
       "files": "ファイルが見つかりません",
+      "image_search_failed": "画像検索を利用できません",
+      "image_search_failed_hint": "画像検索モデルを確認してから、もう一度お試しください。",
+      "image_search_language_unsupported": "デフォルトの検索モデルは英語のみ対応しています",
+      "image_search_language_unsupported_hint": "この言語で検索するには、設定で多言語モデルを選択してください。",
       "image_files": "写真ファイルが見つかりません",
       "raw_files": "RAWファイルが見つかりません",
       "video_files": "動画ファイルが見つかりません",
@@ -523,6 +604,14 @@
       "success": "アルバムの表紙を設定しました",
       "failed": "表紙の設定に失敗しました"
     },
+    "set_desktop_wallpaper": {
+      "success": "デスクトップの壁紙を更新しました",
+      "failed": "デスクトップの壁紙を設定できませんでした"
+    },
+    "refresh_subfolders": {
+      "success": "サブフォルダーを更新しました",
+      "failed": "サブフォルダーを更新できませんでした"
+    },
     "copy_image": {
       "success": "{count} 件のファイルをクリップボードにコピーしました",
       "limit": "一度にコピーできるファイルは最大 {count} 件です。",
@@ -546,7 +635,8 @@
       "first_image": "最初の写真です",
       "last_image": "最後の写真です"
     },
-    "album_exists": "このアルバムは既に存在します"
+    "album_exists": "このアルバムは既に存在します",
+    "album_nested": "このフォルダは別のアルバムと重複しています"
   },
   "statusbar": {
     "files_summary": "{count} ファイル ({size})"
@@ -563,25 +653,26 @@
       "unpin": "固定解除"
     },
     "library": {
-      "add": "ライブラリを追加...",
+      "add": "新規ライブラリ...",
       "edit": "ライブラリを編集...",
       "manage": "ライブラリを管理...",
       "remove": "ライブラリを削除",
       "default": "デフォルトライブラリ"
     },
     "album": {
-      "add": "アルバムを追加...",
-      "edit": "編集...",
+      "add": "新規アルバム",
+      "edit": "アルバムを編集...",
       "scan": "アルバムをスキャン",
       "reorder": "並べ替え",
       "pause_scan": "スキャンを一時停止",
       "include_in_search": "検索に含める",
       "exclude_from_search": "検索から除外",
       "remove": "削除",
-      "refresh": "フォルダーを更新"
+      "delete_folder": "フォルダーを削除",
+      "refresh_subfolders": "サブフォルダーを更新"
     },
     "file": {
-      "new_folder": "新しいフォルダー...",
+      "new_folder": "新しいフォルダー",
       "view_in_new_window": "新しいウィンドウで表示...",
       "copy": "クリップボードにコピー",
       "paste": "ペースト",
@@ -594,8 +685,9 @@
       "generate_ai_captions": "AIキャプションを一括生成",
       "open_selected_videos_in_app": "動画を {app} で開く...",
       "open_in_app": "外部アプリで開く...",
-      "find_similar_images": "類似写真を検索",
-      "find_person_images": "この人の写真を検索",
+      "manage_app": "アプリを管理...",
+      "find_similar_images": "関連写真を検索",
+      "find_person_images": "この人を検索",
       "print": "印刷...",
       "rename": "名前を変更",
       "move_to": "移動...",
@@ -610,6 +702,8 @@
       "reveal_in_file_explorer": "エクスプローラーで表示...",
       "refresh_file_info": "ファイル情報を更新",
       "set_album_cover": "アルバムの表紙に設定",
+      "set_as": "設定",
+      "set_desktop_wallpaper": "デスクトップの壁紙に設定",
       "show_info": "情報を表示",
       "remove_from_collection": "コレクションから削除"
     },
@@ -621,9 +715,7 @@
     },
     "camera_panel": {
       "camera_title": "カメラ",
-      "lens_title": "レンズ",
-      "switch_to_camera": "カメラに切替",
-      "switch_to_lens": "レンズに切替"
+      "lens_title": "レンズ"
     },
     "search": {
       "clear_history": "検索履歴を消去"
@@ -632,12 +724,25 @@
       "index_faces": "顔をインデックス",
       "reset_index": "インデックスをリセット",
       "unnamed": "名前のない人物",
-      "show_more": "さらに表示（{loaded}/{total}）"
+      "search": "人物を検索"
     },
     "tag": {
-      "add": "タグを追加...",
       "rename": "名前を変更",
-      "delete": "削除"
+      "delete": "削除",
+      "new_group": "グループを作成",
+      "edit_group": "グループを編集",
+      "delete_group": "グループを削除",
+      "search": "タグまたはグループを検索",
+      "clear_search": "検索をクリア",
+      "active_tag": "このグループ内に選択中のタグがあります",
+      "name": "名前",
+      "locate": "タグを表示",
+      "empty": "タグはありません",
+      "move_to": "グループに移動",
+      "delete_message": "「{name}」を削除しますか？タグは Default に移動され、ファイルのタグは保持されます。",
+      "exists_in": "このタグは「{group}」に既に存在します。",
+      "name_exists": "同じ名前のグループが既に存在します。",
+      "new_tag_group": "新しいタグのグループ"
     },
     "meta": {
       "favorite": "お気に入り",
@@ -645,7 +750,7 @@
       "tag": "タグ...",
       "collection": "コレクション...",
       "comment": "コメント...",
-      "rotate": "プレビューを回転"
+      "rotate": "表示を回転"
     },
     "sort": {
       "sort_by_name": "名前順",
@@ -711,11 +816,11 @@
       "show": "表示",
       "hide": "非表示",
       "hidden": "非表示",
-      "delete": "削除",
+      "remove": "削除",
       "reorder": "並べ替え",
       "rename": "名前変更",
       "switch_to": "切り替え先",
-      "add_new": "新規追加",
+      "add_new": "新規ライブラリ",
       "add": "追加",
       "placeholder": "ライブラリ名",
       "max_limit_reached": "上限に達しました",
@@ -724,7 +829,10 @@
       "unable_to_load": "読み込めません",
       "library_file_path": "ファイルパス",
       "library_file_size": "ファイルサイズ",
-      "created_at": "作成日時"
+      "created_at": "作成日時",
+      "clean_cache": "未使用のサムネイルキャッシュを削除",
+      "cache_cleaned": "サムネイル {count} 個を削除、{size} を解放しました。",
+      "cache_size": "サムネイルキャッシュ {size}"
     },
     "remove_library": {
       "title": "ライブラリを削除",
@@ -746,8 +854,6 @@
     },
     "new_folder": {
       "title": "新しいフォルダー",
-      "placeholder": "新しいフォルダー名を入力",
-      "ok": "作成",
       "error": "フォルダーを作成できませんでした。"
     },
     "move_to": {
@@ -797,6 +903,7 @@
       "title": "ゴミ箱に入れる",
       "file_content": "ファイル '{file}' をゴミ箱に入れます。",
       "files_content": "{count} 個のファイルをゴミ箱に入れます。",
+      "removable_files_content": "削除可能な {count} 件すべてのファイルをゴミ箱に入れます。",
       "raw_jpeg_companions_content": "RAW+JPEG の関連ファイルも {count} 件削除されます。",
       "folder_content": "フォルダ '{folder}' をゴミ箱に入れます。",
       "ok": "入れる",
@@ -811,6 +918,7 @@
       "title": "完全に削除",
       "file_content": "ファイル '{file}' を完全に削除します。",
       "files_content": "選択した {count} 個のファイルを完全に削除します。",
+      "removable_files_content": "削除可能な {count} 件すべてのファイルを完全に削除します。",
       "folder_content": "フォルダ '{folder}' を完全に削除します。",
       "checkbox": "完全に削除する（元に戻せません）",
       "ok": "削除",
@@ -835,7 +943,6 @@
     },
     "new_tag": {
       "title": "新しいタグ",
-      "content": "タグ名:",
       "ok": "作成",
       "error": "タグを作成できませんでした。"
     },
@@ -856,6 +963,15 @@
     },
     "select_file": {
       "error": "ファイル選択に失敗しました。"
+    },
+    "file_refresh": {
+      "status": "更新状況",
+      "running": "更新中…",
+      "cancelling": "キャンセル中…",
+      "cancelled": "キャンセル済み",
+      "complete": "完了",
+      "succeeded": "更新済み：{count}",
+      "failed": "失敗：{count}"
     },
     "image_editor": {
       "title": "編集",
@@ -900,6 +1016,7 @@
       "saturation": "彩度",
       "reset": "リセット",
       "crop": "切り抜き",
+      "angle": "角度",
       "cancel_crop": "キャンセル",
       "confirm_crop": "確定",
       "crop_shape": "形状",
@@ -1003,7 +1120,7 @@
     "gps_latitude": "緯度",
     "gps_longitude": "経度",
     "gps_altitude": "高度",
-    "geo_location": "位置",
+    "geo_location": "場所",
     "tags": "タグ",
     "comment": "コメント",
     "capture_settings": "撮影設定",
@@ -1031,7 +1148,7 @@
     "satellite": "衛星",
     "heatmap": "ヒートマップ",
     "photo_count": "{count} 枚の写真",
-    "no_photos_in_view": "この範囲に写真はありません",
+    "no_photos_in_view": "写真はありません",
     "photos_in_view": "この範囲に {count} 枚の写真",
     "photos_in_view_limited": "最初の {count} 枚を表示中 - さらに拡大すると絞り込めます"
   },
@@ -1056,10 +1173,13 @@
     }
   },
   "image_viewer": {
+    "live": "ライブ",
+    "motion": "モーション",
     "title": "画像ビューア",
     "loading": "読み込み中...",
     "loading_original": "元写真を読み込み中...",
     "failed": "写真を読み込めませんでした。ファイルが見つからないか、破損しています。",
+    "raw_render_unavailable": "この RAW はレンダリングできません。埋め込みプレビューを表示中。",
     "toolbar": {
       "prev": "前へ",
       "next": "次へ",
@@ -1162,12 +1282,31 @@
       "show_status_bar": "ステータスバー",
       "auto_check_updates": "更新を自動確認"
     },
-    "library": {
-      "title": "ライブラリ",
+    "raw": {
+      "title": "RAW",
+      "section_pairs": "ペアファイル",
+      "pair_source": "ペアの既定の表示",
+      "pair_source_hint": "ペアのサムネイルとプレビューに使用します。",
+      "pair_jpeg": "JPEG / HEIC",
+      "rawPreviewSource": "既定のプレビューソース",
+      "rawRenderBrightness": "レンダリングの明るさ",
+      "option_embedded": "埋め込みプレビューを優先",
+      "option_rendered": "常に RAW をレンダリング",
+      "brightness_hint": "埋め込みプレビューが利用できない場合を含め、RAW のレンダリング時に適用されます。",
+      "switch_to": "{source} に切り替え",
+      "show_pair": "ペアの {format} を表示",
+      "source_embedded": "埋め込み",
+      "source_rendered": "レンダリング",
+      "source_brightened": "明るめ",
+      "option_original": "元の露出",
+      "option_brightened": "明るめ",
+      "preview_mode": "RAW プレビューモード"
+    },
+    "browse": {
+      "title": "ブラウズ",
       "section_album": "アルバム",
       "show_subfolder_files": "サブフォルダー内のファイルを表示",
       "show_subfolder_files_hint": "フォルダービューに子フォルダー内のファイルを含めます",
-      "section_file_grouping": "ファイルのグループ化",
       "group_raw_jpeg_pairs": "RAWペアをまとめて表示",
       "group_raw_jpeg_pairs_hint": "一致する RAW と JPEG/HEIC ファイルを 1 つの項目として表示します",
       "section_sorting": "並べ替え",
@@ -1198,8 +1337,8 @@
         "件数 (多い順)"
       ]
     },
-    "browse": {
-      "title": "ブラウズ",
+    "grid": {
+      "title": "レイアウト",
       "section_grid": "グリッド",
       "style": "スタイル",
       "style_options": [
@@ -1214,6 +1353,11 @@
         "写真全体を合わせる",
         "埋める",
         "引き伸ばす"
+      ],
+      "thumbnail_corners": "サムネイルの角",
+      "thumbnail_corner_options": [
+        "テーマに従う",
+        "角丸なし"
       ],
       "label_primary": "カード表示メインラベル",
       "label_secondary": "カード表示サブラベル",
@@ -1240,7 +1384,6 @@
       ],
       "filmstrip_view": {
         "title": "フィルムストリップ",
-        "enable_filmstrip": "フィルムストリップ表示を有効にする",
         "preview_position": "フィルムストリップの位置",
         "preview_position_options": [
           "上",
@@ -1248,7 +1391,15 @@
           "左",
           "右"
         ]
-      }
+      },
+      "section_map": "地図",
+      "map_marker_size": "地図マーカーのサイズ",
+      "map_marker_size_options": [
+        "小",
+        "中",
+        "大",
+        "特大"
+      ]
     },
     "image_view": {
       "title": "ビューア",
@@ -1266,10 +1417,10 @@
       ],
       "navigator_view__size": "ナビゲーターのサイズ",
       "navigator_view_size_options": [
-        "小(160px)",
-        "中(240px)",
-        "大(320px)",
-        "特大(400px)"
+        "小 (160 px)",
+        "中 (240 px)",
+        "大 (320 px)",
+        "特大 (400 px)"
       ],
       "section_view": "表示",
       "view_background": "背景",
@@ -1297,7 +1448,7 @@
     "image_search": {
       "title": "検索",
       "search_image": "写真検索",
-      "search_model": "モデルを選択（再起動後に反映）",
+      "search_model": "モデルを選択",
       "default_model_hint": "デフォルトモデルは英語の写真検索のみ対応しています",
       "multilingual_model_hint": "50以上の言語で検索できます",
       "search_model_options": [
@@ -1310,14 +1461,24 @@
       "downloading_multilingual_model": "多言語モデルをダウンロード中",
       "multilingual_model_download_success": "多言語検索モデルの準備ができました。使用するには Lap を再起動してください。",
       "multilingual_model_download_failed": "多言語検索モデルのダウンロードに失敗しました",
-      "find_similar": "類似写真を検索",
-      "similarity": "写真の類似度",
-      "similarity_hint": "高いほど類似度が高く、結果は少なくなります。低いほど類似度が低く、結果は多くなります",
+      "similarity": "検索の類似度",
+      "similarity_hint": "キーワード検索の画像一致を調整します",
       "similarity_options": [
-        "非常に高い",
-        "高い",
-        "中",
-        "低い"
+        "厳密",
+        "絞り込み",
+        "標準",
+        "幅広い"
+      ]
+    },
+    "similar_photos": {
+      "title": "類似写真",
+      "grouping_strictness": "グループ化の厳密さ",
+      "grouping_strictness_hint": "同じグループに含める写真の一致度を設定します",
+      "grouping_strictness_options": [
+        "非常に厳密",
+        "厳密",
+        "標準",
+        "緩やか"
       ]
     },
     "shortcuts": {
@@ -1341,9 +1502,11 @@
         "next_image": "次へ",
         "first_image": "最初",
         "last_image": "最後",
-        "quick_preview": "クイックプレビュー",
+        "page_up": "前のページ",
+        "page_down": "次のページ",
+        "quick_preview": "クイックプレビューを開く",
         "close_viewer": "ビューアを閉じる",
-        "search_similar": "類似写真を検索",
+        "search_similar": "関連写真を検索",
         "show_info": "情報を表示",
         "zoom_in": "拡大",
         "zoom_out": "縮小",
@@ -1380,21 +1543,45 @@
         "rate_four": "4つ星評価",
         "rate_five": "5つ星評価",
         "edit_tags": "タグを編集",
-        "add_to_collections": "コレクションに追加",
+        "edit_collections": "コレクションを編集",
         "edit_comment": "コメントを編集",
-        "rotate": "プレビューを回転",
+        "rotate": "表示を時計回りに回転",
+        "rotate_counterclockwise": "表示を反時計回りに回転",
         "thumbnail_increase": "サムネイルを拡大",
         "thumbnail_decrease": "サムネイルを縮小"
       }
     },
     "advanced": {
       "title": "詳細",
+      "section_thumbnail_cache": "サムネイルキャッシュ",
+      "thumbnail_quality": "サムネイル品質",
+      "thumbnail_quality_hint": "生成されるサムネイルの解像度を設定します。高い設定ほど鮮明になりますが、生成に時間がかかりディスク容量を多く使用します",
+      "section_map": "地図",
+      "map_provider": "地図サービス",
+      "map_provider_hint": "地図ビューで使用する地図サービスを選択します",
+      "map_provider_options": [
+        "グローバル（デフォルト）",
+        "中国（天地图）"
+      ],
+      "tianditu_token": "天地图 API トークン",
+      "tianditu_token_hint": "天地图のタイルに必要です",
+      "tianditu_token_placeholder": "トークンを貼り付け",
+      "tianditu_token_status_saved": "保存済み",
+      "tianditu_token_status_empty": "未設定",
+      "thumbnail_quality_options": [
+        "低 (256 px)",
+        "標準 (512 px)",
+        "高 (1024 px)"
+      ],
       "section_external_apps": "外部アプリ",
+      "manage_external_apps": "外部アプリを管理",
       "external_image_editor": "写真を次で開く",
       "external_video_app": "動画を開くアプリ",
       "external_app_not_selected": "アプリが選択されていません",
       "choose_app": "選択",
       "clear_app": "クリア",
+      "default_app": "デフォルト",
+      "set_default_app": "デフォルトに設定",
       "section_diagnostics": "診断",
       "debug_mode": "デバッグモード"
     },
@@ -1413,6 +1600,7 @@
       "restore_default_confirm_ok": "リセット",
       "busy_library_indexing": "ライブラリの索引作成中は保存場所を変更できません。",
       "busy_face_indexing": "顔インデックス作成中は保存場所を変更できません。",
+      "cleanup_warning": "ライブラリデータを移動しましたが、一部の古いファイルを削除できませんでした：",
       "change_success": "ライブラリデータを移動しました",
       "restore_default_success": "ライブラリデータを既定の保存場所に戻しました",
       "backup": "バックアップ",

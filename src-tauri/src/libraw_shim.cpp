@@ -127,11 +127,6 @@ int lap_libraw_get_meta(libraw_data_t *raw, LapLibRawMeta *out) {
     return LIBRAW_UNSPECIFIED_ERROR;
   }
 
-  int ret = libraw_unpack(raw);
-  if (ret != LIBRAW_SUCCESS) {
-    return ret;
-  }
-
   std::memset(out, 0, sizeof(*out));
 
   // Camera info
@@ -227,7 +222,7 @@ int lap_libraw_extract_thumbnail(libraw_data_t *raw, int index,
 }
 
 int lap_libraw_render_preview(libraw_data_t *raw, int half_size,
-                              int strict_data_error,
+                              int strict_data_error, int auto_bright,
                               LapLibRawImage *out) {
   if (!raw || !out) {
     return LIBRAW_UNSPECIFIED_ERROR;
@@ -253,6 +248,7 @@ int lap_libraw_render_preview(libraw_data_t *raw, int half_size,
     return ret;
   }
 
+  raw->params.no_auto_bright = auto_bright ? 0 : 1;
   libraw_set_output_bps(raw, 8);
 
   ret = libraw_dcraw_process(raw);

@@ -14,6 +14,7 @@ use crate::t_libraw;
 use crate::t_storage;
 use crate::t_utils;
 use crate::t_video;
+use crate::t_raw_display::RawDisplayOptions;
 use base64::{Engine, engine::general_purpose};
 use chrono::{Datelike, TimeZone};
 use exif::{In, Tag, Value};
@@ -28,12 +29,42 @@ use std::ops::{Deref, DerefMut};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::process;
-use std::sync::{Condvar, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{Emitter, State};
+use tokio::sync::Semaphore;
+use walkdir::WalkDir;
 
 static THUMB_GENERATION_LOCKS: OnceLock<ThumbGenerationLocks> = OnceLock::new();
 static THUMB_BACKGROUND_TASKS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+static THUMB_BACKGROUND_GENERATION_PERMITS: OnceLock<Arc<Semaphore>> = OnceLock::new();
+const MAX_BACKGROUND_THUMB_GENERATIONS: usize = 4;
+
+fn subtree_like_pattern(path: &str) -> String {
+    let separator = std::path::MAIN_SEPARATOR;
+    let prefix = path.trim_end_matches(separator);
+    let prefix = if prefix.is_empty() {
+        separator.to_string()
+    } else {
+        format!("{}{}", prefix, separator)
+    };
+    format!("{}%", prefix.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"))
+}
+
+fn populate_selected_file_ids(
+    tx: &rusqlite::Transaction<'_>,
+    file_ids: &[i64],
+) -> Result<(), String> {
+    for chunk in file_ids.chunks(500) {
+        let placeholders = std::iter::repeat_n("(?)", chunk.len()).collect::<Vec<_>>().join(",");
+        tx.execute(
+            &format!("INSERT OR IGNORE INTO selected_file_ids (id) VALUES {placeholders}"),
+            params_from_iter(chunk.iter()),
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
 
 struct ThumbGenerationLocks {
     active: Mutex<HashSet<String>>,
@@ -49,6 +80,12 @@ fn thumb_generation_locks() -> &'static ThumbGenerationLocks {
 
 fn thumb_background_tasks() -> &'static Mutex<HashSet<String>> {
     THUMB_BACKGROUND_TASKS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+pub(crate) fn thumb_background_generation_permits() -> Arc<Semaphore> {
+    THUMB_BACKGROUND_GENERATION_PERMITS
+        .get_or_init(|| Arc::new(Semaphore::new(MAX_BACKGROUND_THUMB_GENERATIONS)))
+        .clone()
 }
 
 pub fn has_active_thumb_background_tasks() -> bool {
@@ -97,7 +134,26 @@ pub struct Album {
     pub description: Option<String>,   // album description
     pub indexed: Option<u64>,          // indexed files count
     pub total: Option<u64>,            // total files count
+    pub skipped_count: Option<u64>, // unsupported files from the last complete scan
+    pub skipped_size: Option<u64>,  // total size of unsupported files
+    pub failed_count: Option<u64>,  // unreadable files from the last complete scan
+    pub failed_size: Option<u64>,   // total size of unreadable files
+    pub merged_count: Option<u64>,  // companions merged into logical items
+    pub merged_size: Option<u64>,   // total size of merged companions
     pub last_scan_time: Option<i64>,   // last scan time
+    #[serde(default = "default_album_accessible")]
+    pub is_accessible: bool,
+    pub file_types: i64, // 1=photos, 2=videos, 4=RAW
+    pub small_image_filter: i64,
+    pub excluded_folders: Vec<String>,
+}
+
+fn default_album_visible() -> bool {
+    true
+}
+
+fn default_album_accessible() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize)]
@@ -108,6 +164,63 @@ pub struct AlbumDisplayOrder {
 }
 
 impl Album {
+    pub fn allows_file_type(&self, file_type: i64) -> bool {
+        let bit = match file_type { 1 => 1, 2 => 2, 3 => 4, _ => return true };
+        self.file_types & bit != 0
+    }
+
+    pub fn excludes_path(&self, path: &Path) -> bool {
+        Self::path_is_excluded(Path::new(&self.path), &self.excluded_folders, path)
+    }
+
+    pub(crate) fn path_is_excluded(root: &Path, excluded_folders: &[String], path: &Path) -> bool {
+        let Ok(relative) = path.strip_prefix(root) else { return false; };
+        relative.components().next().is_some_and(|component| {
+            excluded_folders.iter().any(|folder| component.as_os_str() == folder.as_str())
+        })
+    }
+
+    pub fn edit(id: i64, name: &str, description: &str, file_types: i64,
+        small_image_filter: i64, excluded_folders: &[String]) -> Result<usize, String> {
+        if !(1..=7).contains(&file_types) || !matches!(small_image_filter, 0 | 160 | 320 | 640) {
+            return Err("Invalid album filters".into());
+        }
+        // Only one normal path component is allowed; never accept a relative traversal or glob.
+        if excluded_folders.iter().any(|name| name.is_empty() || name == "." || name == ".."
+            || name.contains('/') || name.contains('\\') || name.contains('\0')
+            || !matches!(Path::new(name).components().next(), Some(std::path::Component::Normal(_)))) {
+            return Err("Excluded folders must be first-level subfolder names".into());
+        }
+        let mut conn = open_conn()?;
+        Self::edit_on(&mut conn, id, name, description, file_types, small_image_filter, excluded_folders)
+    }
+
+    fn edit_on(conn: &mut Connection, id: i64, name: &str, description: &str, file_types: i64,
+        small_image_filter: i64, excluded_folders: &[String]) -> Result<usize, String> {
+        let excluded = serde_json::to_string(excluded_folders).map_err(|e| e.to_string())?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        let changed = tx.execute("UPDATE albums SET name=?1, description=?2,
+            indexed=CASE WHEN file_types != ?3 OR excluded_folders != ?5 OR COALESCE(small_image_filter, 0) != ?4 THEN 0 ELSE indexed END,
+            file_types=?3, small_image_filter=?4, excluded_folders=?5 WHERE id=?6",
+            params![name, description, file_types, small_image_filter, excluded, id]).map_err(|e| e.to_string())?;
+        // Pairing is derived state. A retained excluded companion must not still
+        // be opened through an included RAW or Live Photo primary.
+        tx.execute("UPDATE afiles SET media_subtype=NULL, live_photo_video_id=NULL
+            WHERE folder_id IN (SELECT id FROM afolders WHERE album_id=?1)
+            AND ((media_subtype='raw_jpeg_pair' AND (?2 & 5) != 5)
+                OR (media_subtype='live_photo' AND (?2 & 3) != 3))", params![id, file_types])
+            .map_err(|e| e.to_string())?;
+        tx.execute(&format!("UPDATE afiles AS a SET media_subtype=NULL, live_photo_video_id=NULL
+            WHERE folder_id IN (SELECT id FROM afolders WHERE album_id=?1)
+            AND live_photo_video_id IS NOT NULL
+            AND (NOT ({}) OR EXISTS (SELECT 1 FROM afiles companion
+                WHERE companion.id=a.live_photo_video_id AND NOT ({})))",
+            AFile::album_scan_predicate("a"), AFile::album_scan_predicate("companion")), params![id])
+            .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(changed)
+    }
+
     /// create a new album
     fn new(path: &str) -> Result<Self, String> {
         let file_info = t_utils::FileInfo::new(path)?;
@@ -122,7 +235,17 @@ impl Album {
             description: Some(String::new()),
             indexed: Some(0),
             total: Some(0),
+            skipped_count: Some(0),
+            skipped_size: Some(0),
+            failed_count: Some(0),
+            failed_size: Some(0),
+            merged_count: Some(0),
+            merged_size: Some(0),
             last_scan_time: Some(0),
+            is_accessible: true,
+            file_types: 7,
+            small_image_filter: 0,
+            excluded_folders: Vec::new(),
         })
     }
 
@@ -139,7 +262,17 @@ impl Album {
             description: row.get(7)?,
             indexed: row.get(8)?,
             total: row.get(9)?,
-            last_scan_time: row.get(10)?,
+            skipped_count: row.get(10)?,
+            skipped_size: row.get(11)?,
+            failed_count: row.get(12)?,
+            failed_size: row.get(13)?,
+            merged_count: row.get(14)?,
+            merged_size: row.get(15)?,
+            last_scan_time: row.get(16)?,
+            is_accessible: true,
+            file_types: row.get(17)?,
+            small_image_filter: row.get::<_, Option<i64>>(18)?.unwrap_or(0),
+            excluded_folders: serde_json::from_str(&row.get::<_, String>(19)?).unwrap_or_default(),
         })
     }
 
@@ -147,7 +280,7 @@ impl Album {
     fn fetch(path: &str) -> Result<Option<Self>, String> {
         let conn = open_conn()?;
         let result = conn.query_row(
-            "SELECT id, name, path, created_at, modified_at, display_order_id, cover_file_id, description, indexed, total, last_scan_time
+            "SELECT id, name, path, created_at, modified_at, display_order_id, cover_file_id, description, indexed, total, skipped_count, skipped_size, failed_count, failed_size, merged_count, merged_size, last_scan_time, file_types, small_image_filter, excluded_folders
             FROM albums WHERE path = ?1",
             params![path],
             Self::from_row
@@ -170,8 +303,8 @@ impl Album {
 
         // Insert the new album into the db
         let result = conn.execute(
-            "INSERT INTO albums (name, path, created_at, modified_at, display_order_id, cover_file_id, description, indexed, total, last_scan_time) 
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT INTO albums (name, path, created_at, modified_at, display_order_id, cover_file_id, description, indexed, total, skipped_count, skipped_size, failed_count, failed_size, merged_count, merged_size, last_scan_time, small_image_filter)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, 0)",
             params![
                 self.name,
                 self.path,
@@ -182,6 +315,12 @@ impl Album {
                 self.description,
                 self.indexed,
                 self.total,
+                self.skipped_count,
+                self.skipped_size,
+                self.failed_count,
+                self.failed_size,
+                self.merged_count,
+                self.merged_size,
                 self.last_scan_time,
             ],
         ).map_err(|e| e.to_string())?;
@@ -199,12 +338,28 @@ impl Album {
             ));
         }
 
+        // Reject an album that overlaps an existing album (nested inside it or
+        // containing it). A folder can only belong to one album tree;
+        // overlapping albums break folder sync/refresh.
+        let new_path = Path::new(path);
+        for album in Self::get_all_albums()? {
+            let existing_path = Path::new(&album.path);
+            if new_path != existing_path
+                && (new_path.starts_with(existing_path) || existing_path.starts_with(new_path))
+            {
+                return Err(format!(
+                    "Cannot add '{}': it overlaps the existing album '{}' ({}).",
+                    path, album.name, album.path
+                ));
+            }
+        }
+
         // Insert the new album into the database
         Self::new(path)?.insert()?;
 
         // return the newly inserted album
         let new_album = Self::fetch(path)?;
-        Ok(new_album.unwrap())
+        new_album.ok_or_else(|| "Inserted album could not be read back".to_string())
     }
 
     /// delete an album from the db
@@ -257,7 +412,7 @@ impl Album {
         let conn = open_conn()?;
 
         let query =
-            "SELECT id, name, path, created_at, modified_at, display_order_id, cover_file_id, description, indexed, total, last_scan_time
+            "SELECT id, name, path, created_at, modified_at, display_order_id, cover_file_id, description, indexed, total, skipped_count, skipped_size, failed_count, failed_size, merged_count, merged_size, last_scan_time, file_types, small_image_filter, excluded_folders
             FROM albums
             ORDER BY display_order_id ASC";
 
@@ -283,7 +438,7 @@ impl Album {
     pub fn get_album_by_id(id: i64) -> Result<Self, String> {
         let conn = open_conn()?;
         let result = conn.query_row(
-            "SELECT id, name, path, created_at, modified_at, display_order_id, cover_file_id, description, indexed, total, last_scan_time
+            "SELECT id, name, path, created_at, modified_at, display_order_id, cover_file_id, description, indexed, total, skipped_count, skipped_size, failed_count, failed_size, merged_count, merged_size, last_scan_time, file_types, small_image_filter, excluded_folders
             FROM albums WHERE id = ?1",
             params![id],
             Self::from_row
@@ -310,6 +465,23 @@ impl Album {
         Self::update_column(album_id, "last_scan_time", &scan_time)
     }
 
+    pub fn update_last_scan_results(
+        album_id: i64,
+        skipped_count: u64,
+        skipped_size: u64,
+        failed_count: u64,
+        failed_size: u64,
+        merged_count: u64,
+        merged_size: u64,
+    ) -> Result<usize, String> {
+        let conn = open_conn()?;
+        conn.execute(
+            "UPDATE albums SET skipped_count = ?1, skipped_size = ?2, failed_count = ?3, failed_size = ?4, merged_count = ?5, merged_size = ?6 WHERE id = ?7",
+            params![skipped_count, skipped_size, failed_count, failed_size, merged_count, merged_size, album_id],
+        )
+        .map_err(|e| e.to_string())
+    }
+
     /// rename the album root metadata and matching folders in one transaction
     pub fn rename_root_folder(old_path: &str, new_path: &str) -> Result<(), String> {
         let new_name = t_utils::get_file_name(new_path);
@@ -324,9 +496,10 @@ impl Album {
 
         tx.execute(
             "UPDATE afolders
-            SET path = CONCAT(?2, SUBSTRING(path, LENGTH(?1) + 1)), name = ?3
-            WHERE path LIKE ?1 || '%'",
-            params![old_path, new_path, new_name],
+            SET path = CONCAT(?2, SUBSTRING(path, LENGTH(?1) + 1)),
+                name = CASE WHEN path = ?1 THEN ?3 ELSE name END
+            WHERE path = ?1 OR path LIKE ?4 ESCAPE '\\'",
+            params![old_path, new_path, new_name, subtree_like_pattern(old_path)],
         )
         .map_err(|e| e.to_string())?;
 
@@ -346,11 +519,14 @@ impl Album {
         Ok(result)
     }
 
-    /// set album cover to the first file (image/video) if not set
+    /// Keep an album cover when it still refers to a displayable file in that
+    /// album; otherwise fall back to the first available file or no cover.
     pub fn auto_set_cover(id: i64) -> Result<(), String> {
         let conn = open_conn()?;
 
-        // 1. check if cover_file_id is set
+        // A cover ID can remain after its file is removed outside Lap. It is
+        // valid only when the file still belongs to this album and has a
+        // thumbnail that can be displayed in the album list.
         let cover_file_id: Option<i64> = conn
             .query_row(
                 "SELECT cover_file_id FROM albums WHERE id = ?1",
@@ -359,35 +535,51 @@ impl Album {
             )
             .map_err(|e| e.to_string())?;
 
-        if cover_file_id.unwrap_or(0) > 0 {
-            return Ok(());
+        if let Some(cover_file_id) = cover_file_id.filter(|file_id| *file_id > 0) {
+            let cover_query = format!(
+                "SELECT a.id
+                     FROM afiles a
+                     JOIN afolders b ON a.folder_id = b.id
+                     JOIN athumbs c ON a.id = c.file_id
+                     WHERE a.id = ?1
+                       AND b.album_id = ?2
+                       AND (a.file_type IN (1, 2, 3))
+                       AND {}",
+                format!("{}{}", AFile::live_photo_companion_exclusion_condition(), AFile::album_filter_sql("a")),
+            );
+            let cover_is_available: Option<i64> = conn
+                .query_row(&cover_query, params![cover_file_id, id], |row| row.get(0))
+                .optional()
+                .map_err(|e| e.to_string())?;
+            if cover_is_available.is_some() {
+                return Ok(());
+            }
         }
 
-        // 2. get the first formatted file (image or video)
-        let file_id: Option<i64> = conn
-            .query_row(
-                "SELECT a.id 
+        // Choose the first displayable file. A missing candidate intentionally
+        // clears the stale cover so the UI uses its default album icon.
+        let fallback_query = format!(
+            "SELECT a.id
                 FROM afiles a
                 JOIN afolders b ON a.folder_id = b.id
                 JOIN athumbs c ON a.id = c.file_id
-                WHERE b.album_id = ?1 AND (a.file_type = 1 OR a.file_type = 2)
+                WHERE b.album_id = ?1
+                  AND (a.file_type IN (1, 2, 3))
+                  AND {}
                 ORDER BY a.taken_date ASC
                 LIMIT 1",
-                params![id],
-                |row| row.get(0),
-            )
+            format!("{}{}", AFile::live_photo_companion_exclusion_condition(), AFile::album_filter_sql("a")),
+        );
+        let file_id: Option<i64> = conn
+            .query_row(&fallback_query, params![id], |row| row.get(0))
             .optional() // returns Option<i64>
             .map_err(|e| e.to_string())?;
 
-        // 3. update cover_file_id
-        if let Some(fid) = file_id {
-            let _ = conn
-                .execute(
-                    "UPDATE albums SET cover_file_id = ?1 WHERE id = ?2",
-                    params![fid, id],
-                )
-                .map_err(|e| e.to_string())?;
-        }
+        conn.execute(
+            "UPDATE albums SET cover_file_id = ?1 WHERE id = ?2",
+            params![file_id, id],
+        )
+        .map_err(|e| e.to_string())?;
 
         Ok(())
     }
@@ -401,9 +593,10 @@ impl Album {
             .query_row(
                 &format!(
                     "SELECT COUNT(*) FROM afiles a JOIN afolders b ON a.folder_id = b.id
-                    WHERE b.album_id = ?1 AND {} AND {}",
+                    WHERE b.album_id = ?1 AND {} AND {} AND {}",
                     AFile::search_exclusion_condition("b"),
-                    AFile::live_photo_companion_exclusion_condition()
+                    AFile::live_photo_companion_exclusion_condition(),
+                    AFile::album_scan_predicate("a")
                 ),
                 params![id],
                 |row| row.get(0),
@@ -429,6 +622,43 @@ impl Album {
         .map_err(|e| e.to_string())?;
         let result = Self::get_album_by_id(id)?;
         Ok(result)
+    }
+
+    /// Count files visible in the current browse filter for every album.
+    /// This is read-only; scan completion persists the matching index totals.
+    pub fn get_visible_counts() -> Result<HashMap<i64, i64>, String> {
+        let conn = open_conn()?;
+        let query = format!(
+            "SELECT b.album_id, COUNT(DISTINCT a.id)
+             FROM afiles a
+             JOIN afolders b ON b.id = a.folder_id
+             WHERE {} AND {}{}{}
+             GROUP BY b.album_id",
+            AFile::search_exclusion_condition("b"),
+            AFile::live_photo_companion_exclusion_condition(),
+            AFile::album_filter_sql("a"),
+            AFile::inaccessible_album_filter("b"),
+        );
+        let mut stmt = conn.prepare(&query).map_err(|e| e.to_string())?;
+        let rows = stmt.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<HashMap<_, _>, _>>().map_err(|e| e.to_string())
+    }
+
+    pub fn merged_file_stats_in_album(album_id: i64) -> Result<(u64, u64), String> {
+        let conn = open_conn()?;
+        conn.query_row(
+            &format!("SELECT COUNT(*), COALESCE(SUM(companion.size), 0) FROM afiles companion
+             WHERE companion.id IN (
+                 SELECT primary_file.live_photo_video_id FROM afiles primary_file
+                 WHERE primary_file.live_photo_video_id IS NOT NULL AND {}
+                   AND folder_id IN (SELECT id FROM afolders WHERE album_id = ?1)
+             ) AND companion.folder_id IN (SELECT id FROM afolders WHERE album_id = ?1) AND {}",
+             AFile::album_scan_predicate("primary_file"), AFile::album_scan_predicate("companion")),
+            params![album_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|e| e.to_string())
     }
 }
 
@@ -524,6 +754,35 @@ impl FolderSubfolderState {
                     state.path,
                 ])
                 .map_err(|e| e.to_string())?;
+            }
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Update only the cached tree shape after a folder-only refresh.  The
+    /// directory mtime must remain untouched so a later file sync can still
+    /// detect external file changes.
+    pub fn update_subfolder_flags(
+        album_id: i64,
+        states: &[(String, bool)],
+    ) -> Result<(), String> {
+        if states.is_empty() {
+            return Ok(());
+        }
+        let mut conn = open_conn()?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        {
+            let mut stmt = tx
+                .prepare(
+                    "UPDATE afolders
+                    SET has_subfolders = ?1
+                    WHERE album_id = ?2 AND path = ?3",
+                )
+                .map_err(|e| e.to_string())?;
+            for (path, has_subfolders) in states {
+                stmt.execute(params![i64::from(*has_subfolders), album_id, path])
+                    .map_err(|e| e.to_string())?;
             }
         }
         tx.commit().map_err(|e| e.to_string())?;
@@ -812,7 +1071,7 @@ impl AFolder {
         Self::new(album_id, folder_path)?.insert_with_conn(conn)?;
         Self::update_inode_with_conn(conn, album_id, folder_path)?;
         let new_folder = Self::fetch_with_conn(conn, folder_path)?;
-        Ok(new_folder.unwrap())
+        new_folder.ok_or_else(|| "Inserted folder could not be read back".to_string())
     }
 
     fn update_inode_with_conn(
@@ -851,13 +1110,14 @@ impl AFolder {
         album_id: i64,
         seen_folders: &[FolderSubfolderState],
     ) -> Result<usize, String> {
+        let album = Album::get_album_by_id(album_id)?;
         let seen_paths = seen_folders
             .iter()
             .map(|folder| folder.path.as_str())
             .collect::<HashSet<_>>();
         let missing_paths = Self::get_paths_by_album_id(album_id)?
             .into_iter()
-            .filter(|path| !seen_paths.contains(path.as_str()))
+            .filter(|path| !seen_paths.contains(path.as_str()) && !album.excludes_path(Path::new(path)))
             .collect::<Vec<_>>();
         let missing_paths = missing_folder_roots(missing_paths);
 
@@ -877,11 +1137,13 @@ impl AFolder {
         parent_path: &str,
         seen_paths: &HashSet<String>,
     ) -> Result<usize, String> {
+        let album = Album::get_album_by_id(album_id)?;
         let missing_children = Self::get_paths_by_album_id(album_id)?
             .into_iter()
             .filter(|path| {
                 Path::new(path).parent() == Some(Path::new(parent_path))
                     && !seen_paths.contains(path)
+                    && !album.excludes_path(Path::new(path))
             })
             .collect::<Vec<_>>();
 
@@ -906,19 +1168,19 @@ impl AFolder {
         Ok(deleted_count)
     }
 
-    /// move a folder (update path and album_id)
+    /// Move a folder subtree by updating its paths and album ID.
     pub fn move_folder(old_path: &str, new_album_id: i64, new_path: &str) -> Result<usize, String> {
         let conn = open_conn()?;
         let result = conn
             .execute(
                 "UPDATE afolders
                 SET path = CONCAT(?3, SUBSTRING(path, LENGTH(?1) + 1)), album_id = ?2
-                WHERE path = ?1 OR path LIKE ?1 || ?4",
+                WHERE path = ?1 OR path LIKE ?4 ESCAPE '\\'",
                 params![
                     old_path,
                     new_album_id,
                     new_path,
-                    format!("{}%", std::path::MAIN_SEPARATOR)
+                    subtree_like_pattern(old_path),
                 ],
             )
             .map_err(|e| e.to_string())?;
@@ -934,11 +1196,11 @@ impl AFolder {
     ) -> Result<usize, String> {
         let mut conn = open_conn()?;
         let tx = conn.transaction().map_err(|e| e.to_string())?;
-        let destination_pattern = format!("{}{}%", new_path, std::path::MAIN_SEPARATOR);
+        let destination_pattern = subtree_like_pattern(new_path);
 
         let destination_folder_ids: Vec<i64> = {
             let mut stmt = tx
-                .prepare("SELECT id FROM afolders WHERE path = ?1 OR path LIKE ?2")
+                .prepare("SELECT id FROM afolders WHERE path = ?1 OR path LIKE ?2 ESCAPE '\\'")
                 .map_err(|e| e.to_string())?;
             let rows = stmt
                 .query_map(params![new_path, destination_pattern], |row| row.get(0))
@@ -954,7 +1216,7 @@ impl AFolder {
             .map_err(|e| e.to_string())?;
         }
         tx.execute(
-            "DELETE FROM afolders WHERE path = ?1 OR path LIKE ?2",
+            "DELETE FROM afolders WHERE path = ?1 OR path LIKE ?2 ESCAPE '\\'",
             params![new_path, destination_pattern],
         )
         .map_err(|e| e.to_string())?;
@@ -963,12 +1225,12 @@ impl AFolder {
             .execute(
                 "UPDATE afolders
                 SET path = CONCAT(?3, SUBSTRING(path, LENGTH(?1) + 1)), album_id = ?2
-                WHERE path = ?1 OR path LIKE ?1 || ?4",
+                WHERE path = ?1 OR path LIKE ?4 ESCAPE '\\'",
                 params![
                     old_path,
                     new_album_id,
                     new_path,
-                    format!("{}%", std::path::MAIN_SEPARATOR)
+                    subtree_like_pattern(old_path),
                 ],
             )
             .map_err(|e| e.to_string())?;
@@ -980,11 +1242,11 @@ impl AFolder {
         let folder = Self::new(album_id, folder_path)?;
         let mut conn = open_conn()?;
         let tx = conn.transaction().map_err(|e| e.to_string())?;
-        let destination_pattern = format!("{}{}%", folder_path, std::path::MAIN_SEPARATOR);
+        let destination_pattern = subtree_like_pattern(folder_path);
 
         let destination_folder_ids: Vec<i64> = {
             let mut stmt = tx
-                .prepare("SELECT id FROM afolders WHERE path = ?1 OR path LIKE ?2")
+                .prepare("SELECT id FROM afolders WHERE path = ?1 OR path LIKE ?2 ESCAPE '\\'")
                 .map_err(|e| e.to_string())?;
             let rows = stmt
                 .query_map(params![folder_path, destination_pattern], |row| row.get(0))
@@ -999,7 +1261,7 @@ impl AFolder {
             .map_err(|e| e.to_string())?;
         }
         tx.execute(
-            "DELETE FROM afolders WHERE path = ?1 OR path LIKE ?2",
+            "DELETE FROM afolders WHERE path = ?1 OR path LIKE ?2 ESCAPE '\\'",
             params![folder_path, destination_pattern],
         )
         .map_err(|e| e.to_string())?;
@@ -1031,10 +1293,10 @@ impl AFolder {
         // First, get all folder IDs that will be deleted (the folder itself and all children)
         let folder_ids: Vec<i64> = {
             let mut stmt = tx
-                .prepare("SELECT id FROM afolders WHERE path = ?1 OR path LIKE ?2")
+                .prepare("SELECT id FROM afolders WHERE path = ?1 OR path LIKE ?2 ESCAPE '\\'")
                 .map_err(|e| e.to_string())?;
 
-            let path_pattern = format!("{}{}%", folder_path, std::path::MAIN_SEPARATOR);
+            let path_pattern = subtree_like_pattern(folder_path);
             let rows = stmt
                 .query_map(params![folder_path, path_pattern], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
@@ -1052,10 +1314,10 @@ impl AFolder {
         }
 
         // Delete the folders (the folder and all its children)
-        let path_pattern = format!("{}{}%", folder_path, std::path::MAIN_SEPARATOR);
+        let path_pattern = subtree_like_pattern(folder_path);
         let result = tx
             .execute(
-                "DELETE FROM afolders WHERE path = ?1 OR path LIKE ?2",
+                "DELETE FROM afolders WHERE path = ?1 OR path LIKE ?2 ESCAPE '\\'",
                 params![folder_path, path_pattern],
             )
             .map_err(|e| e.to_string())?;
@@ -1152,7 +1414,7 @@ impl AFolder {
 
         let mut folders = Vec::new();
         for folder in rows {
-            folders.push(folder.unwrap());
+            folders.push(folder.map_err(|e| e.to_string())?);
         }
 
         Ok(folders)
@@ -1309,6 +1571,9 @@ pub struct AFile {
     pub media_subtype: Option<String>,      // live_photo, motion_photo, raw_jpeg_pair, ...
     pub live_photo_video_id: Option<i64>,   // paired Live Photo MOV file id
     pub live_photo_video_path: Option<String>, // paired Live Photo MOV path
+    #[serde(default = "default_album_visible")]
+    pub album_visible: bool, // output-only: visibility under this album's filters
+    pub motion_photo_offset: Option<i64>,   // byte offset of embedded MP4 (Android Motion Photo)
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1334,6 +1599,12 @@ pub struct ACollectionOrder {
 pub struct AFileCollection {
     pub id: i64,
     pub name: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ACollectionSelectionCount {
+    pub collection_id: i64,
+    pub count: i64,
 }
 
 impl ACollection {
@@ -1372,20 +1643,30 @@ impl ACollection {
         }
     }
 
+    fn ensure_name_available(conn: &Connection, name: &str, exclude_id: Option<i64>) -> Result<(), String> {
+        let existing: Option<i64> = conn
+            .query_row(
+                "SELECT id FROM acollections WHERE name = ?1 COLLATE NOCASE AND (?2 IS NULL OR id != ?2)",
+                params![name, exclude_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        if existing.is_some() {
+            Err("A collection with this name already exists".to_string())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Collection counts are populated lazily after explicit sidebar activation.
     pub fn list() -> Result<Vec<Self>, String> {
         let conn = open_conn()?;
+        let query = "SELECT id, name, sort_order, 0 AS count, created_at, updated_at
+             FROM acollections
+             ORDER BY sort_order ASC, id ASC";
         let mut stmt = conn
-            .prepare(
-                "SELECT c.id, c.name, c.sort_order, COUNT(a.id) AS count, c.created_at, c.updated_at
-                FROM acollections c
-                LEFT JOIN acollections_files cf ON cf.collection_id = c.id
-                LEFT JOIN afiles a ON a.id = cf.file_id
-                    AND a.id NOT IN (
-                        SELECT live_photo_video_id FROM afiles WHERE live_photo_video_id IS NOT NULL
-                    )
-                GROUP BY c.id
-                ORDER BY c.sort_order ASC, c.id ASC",
-            )
+            .prepare(query)
             .map_err(|e| e.to_string())?;
 
         let rows = stmt
@@ -1398,6 +1679,27 @@ impl ACollection {
         Ok(collections)
     }
 
+    /// Count visible files for every collection in one grouped query.
+    pub fn get_counts() -> Result<HashMap<i64, i64>, String> {
+        let conn = open_conn()?;
+        let query = format!(
+            "SELECT cf.collection_id, COUNT(DISTINCT a.id)
+             FROM acollections_files cf
+             JOIN afiles a ON a.id = cf.file_id
+             JOIN afolders b ON b.id = a.folder_id
+             WHERE {}{}{} AND {}
+             GROUP BY cf.collection_id",
+            AFile::live_photo_companion_exclusion_condition(),
+            AFile::album_filter_sql("a"),
+            AFile::inaccessible_album_filter("b"),
+            AFile::search_exclusion_condition("b"),
+        );
+        let mut stmt = conn.prepare(&query).map_err(|e| e.to_string())?;
+        let rows = stmt.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<HashMap<_, _>, _>>().map_err(|e| e.to_string())
+    }
+
     pub fn create(name: &str) -> Result<Self, String> {
         let trimmed = name.trim();
         if trimmed.is_empty() {
@@ -1405,6 +1707,7 @@ impl ACollection {
         }
 
         let conn = open_conn()?;
+        Self::ensure_name_available(&conn, trimmed, None)?;
         let sort_order: i64 = conn
             .query_row(
                 "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM acollections",
@@ -1448,6 +1751,7 @@ impl ACollection {
         }
 
         let conn = open_conn()?;
+        Self::ensure_name_available(&conn, trimmed, Some(id))?;
         let changed = conn
             .execute(
                 "UPDATE acollections SET name = ?1, updated_at = ?2 WHERE id = ?3",
@@ -1663,6 +1967,49 @@ impl ACollection {
         }
         Ok(collections)
     }
+
+    pub fn get_selection_counts(file_ids: &[i64]) -> Result<Vec<ACollectionSelectionCount>, String> {
+        if file_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut conn = open_conn()?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        tx.execute(
+            "CREATE TEMP TABLE IF NOT EXISTS selected_file_ids (id INTEGER PRIMARY KEY)",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM selected_file_ids", [])
+            .map_err(|e| e.to_string())?;
+        populate_selected_file_ids(&tx, file_ids)?;
+
+        let counts = {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT cf.collection_id, COUNT(*)
+                     FROM acollections_files cf
+                     INNER JOIN selected_file_ids selected ON selected.id = cf.file_id
+                     GROUP BY cf.collection_id",
+                )
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok(ACollectionSelectionCount {
+                        collection_id: row.get(0)?,
+                        count: row.get(1)?,
+                    })
+                })
+                .map_err(|e| e.to_string())?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?
+        };
+
+        tx.execute("DELETE FROM selected_file_ids", [])
+            .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(counts)
+    }
 }
 
 /// Define the timeline marker struct for scrollbar markers
@@ -1682,6 +2029,8 @@ pub struct QueryParams {
     pub search_file_type: i64,
     pub sort_type: i64,
     pub sort_order: i64,
+    #[serde(default)]
+    pub random_seed: i64,
     pub search_all_subfolders: String,
     pub search_folder: String,
     pub start_date: i64,
@@ -1702,6 +2051,8 @@ pub struct QueryParams {
     #[serde(default = "default_culling_flag")]
     pub culling_flag: i64,
     pub tag_id: i64,
+    #[serde(default)]
+    pub tag_group_id: i64,
     pub person_id: i64,
     // GPS bounding box filter (e.g. for "photos in this map area")
     #[serde(default)]
@@ -1741,6 +2092,8 @@ pub struct SmartQueryParams {
     pub sort_type: i64,
     pub sort_order: i64,
     #[serde(default)]
+    pub random_seed: i64,
+    #[serde(default)]
     pub calendar_sort: i64,
     #[serde(default)]
     pub folder_sort: i64,
@@ -1748,6 +2101,14 @@ pub struct SmartQueryParams {
     pub category_sort: i64,
     #[serde(default)]
     pub group_by: i64,
+    #[serde(default)]
+    pub gps_min_lat: Option<f64>,
+    #[serde(default)]
+    pub gps_max_lat: Option<f64>,
+    #[serde(default)]
+    pub gps_min_lon: Option<f64>,
+    #[serde(default)]
+    pub gps_max_lon: Option<f64>,
 }
 
 fn default_smart_query_version() -> i32 {
@@ -1824,12 +2185,36 @@ pub struct ImageSearchParams {
     pub search_text: String,  // search image text (for AI search)
     pub file_id: Option<i64>, // file id (for similar image search)
     pub threshold: f32,       // search threshold
-    pub limit: i64,           // search limit
     #[serde(default)]
     pub file_type: i64, // file type bitmask (0=all, 1=image, 2=video, 4=raw)
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryVisibleCounts {
+    pub all: i64, pub favorite: i64, pub today: i64, pub rated: i64, pub unrated: i64,
+    pub rating_1: i64, pub rating_2: i64, pub rating_3: i64, pub rating_4: i64, pub rating_5: i64,
+    pub pick: i64, pub reject: i64, pub unreviewed: i64,
+}
+
 impl AFile {
+    pub fn get_library_visible_counts() -> Result<LibraryVisibleCounts, String> {
+        let conn = open_conn()?;
+        let today = chrono::Local::now().format("%m-%d").to_string();
+        let query = format!("SELECT COUNT(*), COALESCE(SUM(a.is_favorite=1),0), COALESCE(SUM(strftime('%m-%d',a.taken_date,'unixepoch','localtime')=?1),0), COALESCE(SUM(a.rating>0),0), COALESCE(SUM(a.rating=0),0), COALESCE(SUM(a.rating=1),0), COALESCE(SUM(a.rating=2),0), COALESCE(SUM(a.rating=3),0), COALESCE(SUM(a.rating=4),0), COALESCE(SUM(a.rating=5),0), COALESCE(SUM(a.culling_flag=1),0), COALESCE(SUM(a.culling_flag=2),0), COALESCE(SUM(a.culling_flag=0),0) FROM afiles a JOIN afolders b ON b.id=a.folder_id WHERE {} AND {}{}{}", Self::search_exclusion_condition("b"), Self::live_photo_companion_exclusion_condition(), Self::album_filter_sql("a"), Self::inaccessible_album_filter("b"));
+        conn.query_row(&query, params![today], |r| Ok(LibraryVisibleCounts { all:r.get(0)?, favorite:r.get(1)?, today:r.get(2)?, rated:r.get(3)?, unrated:r.get(4)?, rating_1:r.get(5)?, rating_2:r.get(6)?, rating_3:r.get(7)?, rating_4:r.get(8)?, rating_5:r.get(9)?, pick:r.get(10)?, reject:r.get(11)?, unreviewed:r.get(12)? })).map_err(|e| e.to_string())
+    }
+    fn inaccessible_album_filter(folder_alias: &str) -> String {
+        match t_utils::inaccessible_album_ids().as_slice() {
+            [] => String::new(),
+            ids => format!(
+                " AND {}.album_id NOT IN ({})",
+                folder_alias,
+                ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",")
+            ),
+        }
+    }
+
     /// Exclude files whose folder path is the excluded folder itself or one of its children.
     /// The caller must pass the alias for the file's joined afolders row.
     fn search_exclusion_condition(folder_alias: &str) -> String {
@@ -1856,6 +2241,13 @@ impl AFile {
     }
 
     fn new(folder_id: i64, file_path: &str, file_type: i64) -> Result<Self, String> {
+        Self::new_with_raw_info(folder_id, file_path, file_type, None)
+    }
+
+    fn new_with_raw_info(folder_id: i64, file_path: &str, file_type: i64, raw_info: Option<t_libraw::RawInfo>) -> Result<Self, String> {
+        let raw_info = if file_type == 3 {
+            raw_info.or_else(|| t_libraw::get_raw_info(file_path).ok())
+        } else { None };
         let file_info = t_utils::FileInfo::new(file_path)?;
 
         // get dimensions and duration based on file type
@@ -1883,6 +2275,8 @@ impl AFile {
         let mut gps_longitude: Option<f64> = None;
         let mut gps_altitude: Option<f64> = None;
         let mut content_identifier: Option<String> = None;
+        let mut media_subtype: Option<String> = None;
+        let mut motion_photo_offset: Option<i64> = None;
 
         // Pre-read file header once for images (saves 3-4 redundant File::open per file).
         let file_header: Option<Vec<u8>> = if file_type == 1 || file_type == 3 {
@@ -1914,6 +2308,18 @@ impl AFile {
                 .and_then(crate::t_apple_sidecar::apple_content_identifier_from_bytes);
         }
 
+        // Android Motion Photo: JPEG with an embedded MP4 appended after EOI.
+        if file_type == 1 && t_image::is_jpeg_path(file_path) {
+            // Zero records that this JPEG has been checked and is not a Motion Photo.
+            // NULL is reserved for JPEGs indexed before Motion Photo support, so a
+            // later rescan can detect them once.
+            motion_photo_offset = Some(0);
+            if let Some(offset) = crate::t_motion_photo::detect_motion_photo(Path::new(file_path)) {
+                media_subtype = Some("motion_photo".to_string());
+                motion_photo_offset = Some(offset as i64);
+            }
+        }
+
         match file_type {
             1 => {
                 let (w, h) = t_image::get_image_dimensions(file_path)?;
@@ -1935,7 +2341,11 @@ impl AFile {
                 content_identifier = video_metadata.content_identifier;
             }
             3 => {
-                let (w, h) = t_image::get_raw_dimensions(file_path)?;
+                let (w, h) = match raw_info.as_ref().and_then(|info| info.dimensions)
+                    .filter(|(w, h)| *w > 0 && *h > 0) {
+                    Some(dimensions) => dimensions,
+                    None => t_image::get_raw_dimensions(file_path)?,
+                };
                 width = w;
                 height = h;
             }
@@ -2067,7 +2477,7 @@ impl AFile {
             // that the permissive EXIF reader scans, so it is robust against
             // RAW files whose EXIF data is stored outside the preview image.
             if file_type == 3 {
-                if let Ok(meta) = t_libraw::get_raw_meta(file_path) {
+                if let Some(meta) = raw_info.as_ref().map(|info| info.meta.clone()) {
                     if e_make.is_none() {
                         e_make = meta.make;
                     }
@@ -2121,24 +2531,25 @@ impl AFile {
                 || e_lens_model.is_none()
             {
                 if let Some(data) = file_header_deref {
+                    let tiff_base = Self::find_tiff_base(data);
                     if e_make.is_none() {
-                        e_make = Self::scrape_ascii_from_tag(data, 0x010f);
+                        e_make = Self::scrape_ascii_from_tag(data, tiff_base, 0x010f);
                     }
                     if e_model.is_none() {
-                        e_model = Self::scrape_ascii_from_tag(data, 0x0110);
+                        e_model = Self::scrape_ascii_from_tag(data, tiff_base, 0x0110);
                     }
                     if e_date_time.is_none() {
-                        e_date_time = Self::scrape_ascii_from_tag(data, 0x9003)
-                            .or_else(|| Self::scrape_ascii_from_tag(data, 0x0132));
+                        e_date_time = Self::scrape_ascii_from_tag(data, tiff_base, 0x9003)
+                            .or_else(|| Self::scrape_ascii_from_tag(data, tiff_base, 0x0132));
                     }
                     if e_software.is_none() {
-                        e_software = Self::scrape_ascii_from_tag(data, 0x0131);
+                        e_software = Self::scrape_ascii_from_tag(data, tiff_base, 0x0131);
                     }
                     if e_lens_model.is_none() {
-                        e_lens_model = Self::scrape_ascii_from_tag(data, 0xa434);
+                        e_lens_model = Self::scrape_ascii_from_tag(data, tiff_base, 0xa434);
                     }
                     if e_lens_make.is_none() {
-                        e_lens_make = Self::scrape_ascii_from_tag(data, 0xa433);
+                        e_lens_make = Self::scrape_ascii_from_tag(data, tiff_base, 0xa433);
                     }
                     // Extra Orientation fallback for Sony MakerNotes (Tag 0x2000)
                     if e_orientation.is_none() || e_orientation == Some(1) {
@@ -2158,13 +2569,8 @@ impl AFile {
             }
 
             // Re-update taken_date if we found e_date_time via binary fallback
-            if taken_date == file_info.modified {
-                if let Some(dt) = e_date_time.as_ref() {
-                    if let Some(ts) = t_utils::meta_date_to_timestamp(dt) {
-                        taken_date = Some(ts);
-                    }
-                }
-            }
+            taken_date = Self::capture_date_with_fallback(
+                taken_date, file_info.modified, e_date_time.as_deref());
         } else if file_type == 2 {
             taken_date = e_date_time
                 .as_ref()
@@ -2188,9 +2594,10 @@ impl AFile {
                 (None, None, None, None)
             };
 
-        // RAW dimensions are already orientation-adjusted in `get_raw_dimensions`.
-        let should_swap_dimensions_for_orientation =
-            file_type != 3 && !t_image::is_heic_path(file_path);
+        // RAW and TIFF dimensions already match their decoder output.
+        let should_swap_dimensions_for_orientation = file_type != 3
+            && !t_image::is_heic_path(file_path)
+            && !t_libraw::is_tiff_path(file_path);
 
         let file = Self {
             id: None,
@@ -2270,12 +2677,62 @@ impl AFile {
             has_embedding: None,
             last_scan_time: Some(0),
             content_identifier,
-            media_subtype: None,
+            media_subtype,
             live_photo_video_id: None,
             live_photo_video_path: None,
+            motion_photo_offset,
+            album_visible: true,
         };
 
         Ok(file)
+    }
+
+    fn capture_date_with_fallback(taken: Option<i64>, modified: Option<i64>, date: Option<&str>) -> Option<i64> {
+        if taken == modified {
+            date.and_then(t_utils::meta_date_to_timestamp).or(taken)
+        } else { taken }
+    }
+
+    /// Read the capture timestamp used by Lap before a file is imported.
+    /// This keeps date-organized imports consistent with the timestamp shown
+    /// after the same file has been indexed.
+    pub fn capture_timestamp_with_raw_info(file_path: &str, file_type: i64, raw_info: Option<&t_libraw::RawInfo>) -> Result<i64, String> {
+        let modified = t_utils::systemtime_to_timestamp(
+            std::fs::metadata(file_path).map_err(|e| e.to_string())?.modified().ok());
+        let taken = if file_type == 2 {
+            t_video::get_video_metadata(file_path)?.e_date_time
+                .as_deref().and_then(t_utils::meta_date_to_timestamp).or(modified)
+        } else if file_type == 1 || file_type == 3 {
+            use std::io::Read;
+            let header = std::fs::File::open(file_path).ok().and_then(|mut file| {
+                let mut bytes = vec![0; 128 * 1024];
+                file.read(&mut bytes).ok().map(|n| { bytes.truncate(n); bytes })
+            });
+            let exif = if let Some(bytes) = header.as_deref() {
+                t_image::read_exif_from_bytes_permissive(bytes).or_else(|| {
+                    (file_type == 1 && t_image::is_jpeg_path(file_path))
+                        .then(|| t_image::read_exif_permissive(file_path)).flatten()
+                })
+            } else { t_image::read_exif_permissive(file_path) };
+            let mut date = Self::get_exif_field(&exif, Tag::DateTimeOriginal);
+            let mut taken = date.as_deref().and_then(t_utils::meta_date_to_timestamp).or(modified);
+            if file_type == 3 && taken == modified {
+                let timestamp = match raw_info {
+                    Some(info) => info.meta.timestamp,
+                    None => t_libraw::get_raw_meta(file_path).ok().and_then(|meta| meta.timestamp),
+                };
+                taken = timestamp.or(taken);
+            }
+            if date.is_none() {
+                if let Some(bytes) = header.as_deref() {
+                    let tiff_base = Self::find_tiff_base(bytes);
+                    date = Self::scrape_ascii_from_tag(bytes, tiff_base, 0x9003)
+                        .or_else(|| Self::scrape_ascii_from_tag(bytes, tiff_base, 0x0132));
+                }
+            }
+            Self::capture_date_with_fallback(taken, modified, date.as_deref())
+        } else { modified };
+        taken.ok_or_else(|| format!("Could not read a date from: {}", file_path))
     }
 
     fn extract_gps_data(exif: &Option<exif::Exif>) -> (Option<f64>, Option<f64>, Option<f64>) {
@@ -2400,11 +2857,12 @@ impl AFile {
         }
     }
 
-    fn scrape_ascii_from_tag(data: &[u8], tag_id: u16) -> Option<String> {
-        // Find the TIFF base (where the EXIF/TIFF header starts)
-        let tiff_base = data
-            .windows(4)
-            .position(|w| w == b"II\x2a\x00" || w == b"MM\x00\x2a")?;
+    fn find_tiff_base(data: &[u8]) -> Option<usize> {
+        data.windows(4).position(|w| w == b"II\x2a\x00" || w == b"MM\x00\x2a")
+    }
+
+    fn scrape_ascii_from_tag(data: &[u8], tiff_base: Option<usize>, tag_id: u16) -> Option<String> {
+        let tiff_base = tiff_base?;
 
         let target_le = [(tag_id & 0xFF) as u8, (tag_id >> 8) as u8, 0x02, 0x00];
         let target_be = [(tag_id >> 8) as u8, (tag_id & 0xFF) as u8, 0x00, 0x02];
@@ -2481,9 +2939,9 @@ impl AFile {
                 is_favorite, rating, rotate, comments, has_tags,
                 e_make, e_model, e_date_time, e_software, e_artist, e_copyright, e_description, e_lens_make, e_lens_model, e_exposure_bias, e_exposure_time, e_f_number, e_focal_length, e_iso_speed, e_flash, e_orientation,
                 gps_latitude, gps_longitude, gps_altitude, geo_name, geo_admin1, geo_admin2, geo_cc,
-                last_scan_time, content_identifier
+                last_scan_time, content_identifier, media_subtype, motion_photo_offset
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45)
             ON CONFLICT(folder_id, name) DO NOTHING",
             params![
                 self.folder_id,
@@ -2535,6 +2993,8 @@ impl AFile {
                 self.geo_cc,
                 self.last_scan_time,
                 self.content_identifier,
+                self.media_subtype,
+                self.motion_photo_offset,
             ]
         ).map_err(|e| e.to_string())?;
         Ok(result)
@@ -2551,8 +3011,8 @@ impl AFile {
                 rating = ?13,
                 e_make = ?14, e_model = ?15, e_date_time = ?16, e_software = ?17, e_artist = ?18, e_copyright = ?19, e_description = ?20, e_lens_make = ?21, e_lens_model = ?22, e_exposure_bias = ?23, e_exposure_time = ?24, e_f_number = ?25, e_focal_length = ?26, e_iso_speed = ?27, e_flash = ?28, e_orientation = ?29,
                 gps_latitude = ?30, gps_longitude = ?31, gps_altitude = ?32, geo_name = ?33, geo_admin1 = ?34, geo_admin2 = ?35, geo_cc = ?36,
-                last_scan_time = ?37, content_identifier = ?38
-            WHERE id = ?39",
+                last_scan_time = ?37, content_identifier = ?38, media_subtype = ?39, motion_photo_offset = ?40
+            WHERE id = ?41",
             params![
                 file.name,
                 file.name_pinyin,
@@ -2596,6 +3056,8 @@ impl AFile {
                 file.geo_cc,
                 file.last_scan_time,
                 file.content_identifier,
+                file.media_subtype,
+                file.motion_photo_offset,
                 file_id,
             ]
         ).map_err(|e| e.to_string())?;
@@ -2727,13 +3189,14 @@ impl AFile {
         base_query.to_string()
     }
 
-    fn live_photo_companion_exclusion_condition() -> &'static str {
-        "a.id NOT IN (SELECT live_photo_video_id FROM afiles WHERE live_photo_video_id IS NOT NULL)"
+    fn live_photo_companion_exclusion_condition() -> String {
+        format!("a.id NOT IN (SELECT primary_file.live_photo_video_id FROM afiles primary_file
+            WHERE primary_file.live_photo_video_id IS NOT NULL AND {})", Self::album_scan_predicate("primary_file"))
     }
 
     // build the base SQL query
     fn build_base_query() -> String {
-        String::from(
+        format!(
             "SELECT a.id, a.folder_id, 
                 a.name, a.name_pinyin, a.size, a.file_type, a.format_label, a.created_at, a.modified_at, a.inode,
                 a.taken_date,
@@ -2755,12 +3218,15 @@ impl AFile {
                     WHEN lpv.id IS NOT NULL AND lpf.path IS NOT NULL
                     THEN lpf.path || '/' || lpv.name
                     ELSE NULL
-                END AS live_photo_video_path
-            FROM afiles a 
+                END AS live_photo_video_path,
+                a.motion_photo_offset,
+                {} AS album_visible
+            FROM afiles a
             LEFT JOIN afolders b ON a.folder_id = b.id
             LEFT JOIN albums c ON b.album_id = c.id
             LEFT JOIN afiles lpv ON a.live_photo_video_id = lpv.id
-            LEFT JOIN afolders lpf ON lpv.folder_id = lpf.id"
+            LEFT JOIN afolders lpf ON lpv.folder_id = lpf.id",
+            Self::album_joined_filter_predicate("a", "b", "c")
         )
     }
 
@@ -2832,6 +3298,8 @@ impl AFile {
             media_subtype: row.get(52)?,
             live_photo_video_id: row.get(53)?,
             live_photo_video_path: row.get(54)?,
+            motion_photo_offset: row.get(55)?,
+            album_visible: row.get(56)?,
         })
     }
 
@@ -3158,6 +3626,72 @@ impl AFile {
         }
     }
 
+    /// The scan and all query surfaces share the same exclusion rules. Retained
+    /// excluded rows are protected from sweep so restoring a rule restores metadata.
+    fn album_scan_predicate(alias: &str) -> String {
+        Self::album_query_predicate(alias)
+    }
+
+    fn album_media_predicate(file: &str, album: &str) -> String {
+        format!("(({album}.file_types & CASE {file}.file_type WHEN 1 THEN 1 WHEN 2 THEN 2 WHEN 3 THEN 4 ELSE 0 END) != 0
+            AND ({file}.file_type = 2 OR IFNULL({file}.width, 0) <= 0 OR IFNULL({file}.height, 0) <= 0
+                OR {file}.width >= COALESCE({album}.small_image_filter, 0)
+                OR {file}.height >= COALESCE({album}.small_image_filter, 0)))")
+    }
+
+    fn album_folder_excluded_predicate(folder: &str, album: &str) -> String {
+        format!("EXISTS (SELECT 1 FROM json_each({album}.excluded_folders) excluded
+            WHERE replace({folder}.path, char(92), '/') = rtrim(replace({album}.path, char(92), '/'), '/') || '/' || excluded.value
+            OR substr(replace({folder}.path, char(92), '/'), 1,
+                length(rtrim(replace({album}.path, char(92), '/'), '/') || '/' || excluded.value || '/'))
+                = rtrim(replace({album}.path, char(92), '/'), '/') || '/' || excluded.value || '/')")
+    }
+
+    // Reuse the base query's existing joins for output visibility.
+    fn album_joined_filter_predicate(file: &str, folder: &str, album: &str) -> String {
+        format!("({album}.id IS NOT NULL AND {} AND NOT ({}))",
+            Self::album_media_predicate(file, album),
+            Self::album_folder_excluded_predicate(folder, album))
+    }
+
+    // Single-folder queries should not materialize exclusions across the library.
+    fn album_filter_predicate(alias: &str) -> String {
+        format!("EXISTS (SELECT 1 FROM afolders scope_folder JOIN albums scope_album
+            ON scope_album.id = scope_folder.album_id WHERE scope_folder.id = {alias}.folder_id AND {})",
+            Self::album_joined_filter_predicate(alias, "scope_folder", "scope_album"))
+    }
+
+    fn album_query_predicate(alias: &str) -> String {
+        // Materialize excluded folder IDs once per bulk query, not per file.
+        format!("(EXISTS (SELECT 1 FROM afolders scope_folder JOIN albums scope_album
+            ON scope_album.id = scope_folder.album_id WHERE scope_folder.id = {alias}.folder_id AND {})
+            AND {alias}.folder_id NOT IN (
+                SELECT excluded_folder.id FROM afolders excluded_folder JOIN albums excluded_album
+                ON excluded_album.id = excluded_folder.album_id
+                WHERE excluded_album.excluded_folders != '[]' AND {}))",
+            Self::album_media_predicate(alias, "scope_album"),
+            Self::album_folder_excluded_predicate("excluded_folder", "excluded_album"))
+    }
+
+    pub fn is_album_visible(file_id: i64) -> Result<bool, String> {
+        Self::is_album_visible_on(&*open_conn()?, file_id)
+    }
+
+    fn is_album_visible_on(conn: &Connection, file_id: i64) -> Result<bool, String> {
+        conn.query_row(&format!("SELECT EXISTS (SELECT 1 FROM afiles a
+            JOIN afolders b ON b.id=a.folder_id JOIN albums c ON c.id=b.album_id
+            WHERE a.id=?1 AND {})", Self::album_joined_filter_predicate("a", "b", "c")),
+            params![file_id], |row| row.get(0)).map_err(|e| e.to_string())
+    }
+
+    fn append_album_filter(conditions: &mut Vec<String>) {
+        conditions.push(Self::album_query_predicate("a"));
+    }
+
+    fn album_filter_sql(alias: &str) -> String {
+        format!(" AND {}", Self::album_query_predicate(alias))
+    }
+
     /// insert a file into db if not exists
     /// Returns (file, status)
     /// status: 0 - existing, 1 - new, 2 - updated
@@ -3167,6 +3701,13 @@ impl AFile {
         file_type: i64,
         last_scan_time: i64,
     ) -> Result<(Self, i32), String> {
+        Self::add_to_db_with_raw_info(folder_id, file_path, file_type, last_scan_time, None)
+    }
+
+    pub fn add_to_db_with_raw_info(
+        folder_id: i64, file_path: &str, file_type: i64, last_scan_time: i64,
+        raw_info: Option<t_libraw::RawInfo>,
+    ) -> Result<(Self, i32), String> {
         // Check if the file exists
         let existing_file = Self::fetch(folder_id, file_path)?;
         if let Some(mut file) = existing_file {
@@ -3174,8 +3715,27 @@ impl AFile {
             let file_info = t_utils::FileInfo::new(file_path)?;
             let modified = file.modified_at != file_info.modified;
             let missing_thumb = !file.has_thumbnail.unwrap_or(false);
+            let needs_tiff_dimension_refresh = t_libraw::is_tiff_path(file_path)
+                && file.e_orientation.unwrap_or(1) > 4
+                && t_image::get_image_dimensions(file_path).is_ok_and(|(width, height)| {
+                    file.width != Some(width) || file.height != Some(height)
+                });
+            // JPEGs indexed before Motion Photo support have no detection marker.
+            // Recheck those files once on their next album scan.
+            let needs_motion_photo_detection = file_type == 1
+                && t_image::is_jpeg_path(file_path)
+                && file.motion_photo_offset.is_none();
 
-            if modified || missing_thumb {
+            if needs_motion_photo_detection
+                && !modified
+                && !missing_thumb
+                && !needs_tiff_dimension_refresh
+            {
+                Self::refresh_motion_photo_detection(&mut file, file_path, last_scan_time)?;
+                return Ok((file, 2));
+            }
+
+            if modified || missing_thumb || needs_tiff_dimension_refresh {
                 if let Some(file_id) = file.id {
                     if let Some(mut updated_file) =
                         Self::update_file_info(file_id, file_path, last_scan_time)?
@@ -3222,7 +3782,7 @@ impl AFile {
         }
 
         // insert the new file into the database
-        let mut new_file_struct = Self::new(folder_id, file_path, file_type)?;
+        let mut new_file_struct = Self::new_with_raw_info(folder_id, file_path, file_type, raw_info)?;
         new_file_struct.last_scan_time = Some(last_scan_time);
         let inserted = new_file_struct.insert()?;
 
@@ -3270,9 +3830,16 @@ impl AFile {
                 .collect::<Vec<_>>()
                 .join(",");
             let sql = format!(
-                "{} WHERE a.id IN ({})",
+                "{} WHERE a.id IN ({}){}",
                 Self::build_base_query(),
-                placeholders
+                placeholders,
+                match t_utils::inaccessible_album_ids().as_slice() {
+                    [] => String::new(),
+                    ids => format!(
+                        " AND b.album_id NOT IN ({})",
+                        ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",")
+                    ),
+                }
             );
             let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
             let rows = stmt
@@ -3316,12 +3883,65 @@ impl AFile {
         new_file_info.has_tags = old_file_info.has_tags;
         new_file_info.has_thumbnail = old_file_info.has_thumbnail;
         new_file_info.has_embedding = old_file_info.has_embedding;
+        // Live Photo / RAW+JPEG pairing is derived from the scan-time pairing
+        // pass, not from re-extracting metadata, so retain it when this refresh
+        // does not identify an embedded Motion Photo.
+        if new_file_info.media_subtype.is_none()
+            && matches!(
+                old_file_info.media_subtype.as_deref(),
+                Some("live_photo" | "raw_jpeg_pair")
+            )
+        {
+            new_file_info.media_subtype = old_file_info.media_subtype.clone();
+            new_file_info.live_photo_video_id = old_file_info.live_photo_video_id;
+        }
         new_file_info.last_scan_time = Some(last_scan_time);
 
         // update the file info
         Self::update(file_id, &new_file_info)?;
 
         Self::get_file_info(file_id)
+    }
+
+    /// Backfill Motion Photo metadata without re-extracting all file metadata.
+    fn refresh_motion_photo_detection(
+        file: &mut Self,
+        file_path: &str,
+        last_scan_time: i64,
+    ) -> Result<(), String> {
+        let file_id = file
+            .id
+            .ok_or_else(|| "File is missing an id".to_string())?;
+        if let Some(offset) = crate::t_motion_photo::detect_motion_photo(Path::new(file_path)) {
+            file.media_subtype = Some("motion_photo".to_string());
+            file.motion_photo_offset = Some(offset as i64);
+        } else {
+            // Preserve sidecar-derived pairings; they are maintained by the
+            // dedicated Live Photo / RAW+JPEG pairing pass.
+            if !matches!(
+                file.media_subtype.as_deref(),
+                Some("live_photo" | "raw_jpeg_pair")
+            ) {
+                file.media_subtype = None;
+            }
+            file.motion_photo_offset = Some(0);
+        }
+        file.last_scan_time = Some(last_scan_time);
+
+        open_conn()?
+            .execute(
+                "UPDATE afiles
+                 SET media_subtype = ?1, motion_photo_offset = ?2, last_scan_time = ?3
+                 WHERE id = ?4",
+                params![
+                    file.media_subtype,
+                    file.motion_photo_offset,
+                    file.last_scan_time,
+                    file_id,
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     /// update a file column value
@@ -3447,6 +4067,11 @@ impl AFile {
         affected_names: &HashSet<String>,
         refresh_missing_identifiers: bool,
     ) -> Result<usize, String> {
+        if let Some(folder) = AFolder::get_by_id(folder_id)? {
+            let album = Album::get_album_by_id(folder.album_id)?;
+            if album.excludes_path(Path::new(&folder.path)) { return Ok(0); }
+            if album.file_types & 3 != 3 { return Self::clear_live_photo_pairs_in_folder(folder_id); }
+        }
         #[derive(Clone)]
         struct Candidate {
             id: i64,
@@ -3588,12 +4213,12 @@ impl AFile {
         let candidates = {
             let mut stmt = conn
                 .prepare(
-                    "SELECT a.id, a.name, a.file_type, a.content_identifier,
+                    &format!("SELECT a.id, a.name, a.file_type, a.content_identifier,
                             a.media_subtype, a.live_photo_video_id
                      FROM afiles a
                      JOIN live_photo_candidate_names candidates
                        ON a.name = candidates.name COLLATE NOCASE
-                     WHERE a.folder_id = ?1",
+                     WHERE a.folder_id = ?1 AND {}", Self::album_filter_predicate("a")),
                 )
                 .map_err(|e| e.to_string())?;
             let rows = stmt
@@ -3851,12 +4476,18 @@ impl AFile {
     }
 
     pub fn pair_raw_jpeg_in_folder(folder_id: i64) -> Result<usize, String> {
+        if let Some(folder) = AFolder::get_by_id(folder_id)? {
+            let album = Album::get_album_by_id(folder.album_id)?;
+            if album.excludes_path(Path::new(&folder.path)) { return Ok(0); }
+            if album.file_types & 5 != 5 { return Self::clear_raw_jpeg_pairs_in_folder(folder_id); }
+        }
         fn stem(name: &str) -> Option<String> { Path::new(name).file_stem()?.to_str().map(|value| value.to_ascii_lowercase()) }
         fn ext(name: &str) -> String { Path::new(name).extension().and_then(|value| value.to_str()).unwrap_or("").to_ascii_lowercase() }
         let files = Self::get_files_by_folder_id(folder_id)?;
         let mut companions = HashMap::<String, Vec<i64>>::new();
         let mut raws = HashMap::<String, usize>::new();
         for file in &files {
+            if !file.album_visible { continue; }
             if matches!(ext(&file.name).as_str(), "jpg" | "jpeg" | "heic" | "heif" | "hif") {
                 if let (Some(id), Some(file_stem)) = (file.id, stem(&file.name)) { companions.entry(file_stem).or_default().push(id); }
             }
@@ -3871,7 +4502,7 @@ impl AFile {
             if !t_common::RAW_IMGS.iter().any(|raw| raw.eq_ignore_ascii_case(&ext(&file.name))) { continue; }
             let (Some(id), Some(file_stem)) = (file.id, stem(&file.name)) else { continue; };
             let candidates = companions.get(&file_stem).cloned().unwrap_or_default();
-            let desired = (raws.get(&file_stem) == Some(&1) && candidates.len() == 1)
+            let desired = (file.album_visible && raws.get(&file_stem) == Some(&1) && candidates.len() == 1)
                 .then(|| candidates.first().copied())
                 .flatten();
             let current = (file.media_subtype.as_deref() == Some("raw_jpeg_pair")).then_some(file.live_photo_video_id).flatten();
@@ -3905,15 +4536,27 @@ impl AFile {
         ).map_err(|error| error.to_string())
     }
 
+    pub fn retain_excluded_image(album_id: i64, path: &str, width: u32, height: u32) -> Result<(), String> {
+        let path = Path::new(path);
+        let parent = path.parent().ok_or("Image has no parent folder")?.to_string_lossy();
+        let name = path.file_name().ok_or("Image has no filename")?.to_string_lossy();
+        open_conn()?.execute("UPDATE afiles SET width=?1, height=?2
+            WHERE name=?3 AND folder_id IN (SELECT id FROM afolders WHERE album_id=?4 AND path=?5)
+            AND (width IS NOT ?1 OR height IS NOT ?2)",
+            params![width, height, name.as_ref(), album_id, parent.as_ref()]).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     /// delete unseen files in an album (database only)
     pub fn delete_unseen_in_album(album_id: i64, current_scan_time: i64) -> Result<usize, String> {
         let mut conn = open_conn()?;
         let tx = conn.transaction().map_err(|e| e.to_string())?;
-        let query = "DELETE FROM afiles 
-            WHERE last_scan_time < ?1 
-            AND folder_id IN (SELECT id FROM afolders WHERE album_id = ?2)";
+        let query = format!("DELETE FROM afiles AS a
+            WHERE last_scan_time < ?1
+            AND folder_id IN (SELECT id FROM afolders WHERE album_id = ?2)
+            AND {}", Self::album_scan_predicate("a"));
         let result = tx
-            .execute(query, params![current_scan_time, album_id])
+            .execute(&query, params![current_scan_time, album_id])
             .map_err(|e| e.to_string())?;
         tx.commit().map_err(|e| e.to_string())?;
         Ok(result)
@@ -3956,13 +4599,17 @@ impl AFile {
         let query = format!(
             "SELECT {} AS group_date, COUNT(1)
             FROM afiles a
-            WHERE {} IS NOT NULL AND {} >= 86400 AND {}
+            JOIN afolders b ON a.folder_id = b.id
+            WHERE {} IS NOT NULL AND {} >= 86400 AND {}{}{} AND {}
             GROUP BY {}
             ORDER BY group_date {}",
             date_expr,
             date_col,
             date_col,
             Self::live_photo_companion_exclusion_condition(),
+            Self::inaccessible_album_filter("b"),
+            Self::album_filter_sql("a"),
+            Self::search_exclusion_condition("b"),
             date_expr,
             order_clause
         );
@@ -3981,17 +4628,6 @@ impl AFile {
         Ok(results)
     }
 
-    // get total count and size of files
-    pub fn get_total_count_and_sum() -> Result<(i64, i64), String> {
-        let sql = format!(
-            "{} WHERE {} AND {}",
-            Self::build_count_query(),
-            Self::search_exclusion_condition("b"),
-            Self::live_photo_companion_exclusion_condition()
-        );
-        Self::query_count_and_sum(&sql, &[])
-    }
-
     // helper to build search query conditions and params
     // Returns (joins_clause, where_clause, params)
     fn build_search_query_parts(params: &QueryParams) -> (String, String, Vec<Box<dyn ToSql>>) {
@@ -3999,6 +4635,18 @@ impl AFile {
         let mut conditions: Vec<String> =
             vec![Self::live_photo_companion_exclusion_condition().to_string()];
         let mut sql_params: Vec<Box<dyn ToSql>> = Vec::new();
+
+        let inaccessible_album_ids = t_utils::inaccessible_album_ids();
+        if !inaccessible_album_ids.is_empty() {
+            conditions.push(format!(
+                "b.album_id NOT IN ({})",
+                inaccessible_album_ids
+                    .iter()
+                    .map(i64::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ));
+        }
 
         if let Some((condition, values)) =
             lap_core::t_caption::literal_search_condition(&params.search_file_name)
@@ -4013,15 +4661,13 @@ impl AFile {
             conditions.push(condition);
         }
 
+        Self::append_album_filter(&mut conditions);
+
         if !params.search_all_subfolders.is_empty() {
             // Match path that starts with search_folder followed by '/' or end of string
-            conditions.push("(b.path = ? OR b.path LIKE ?)".to_string());
+            conditions.push("(b.path = ? OR b.path LIKE ? ESCAPE '\\')".to_string());
             sql_params.push(Box::new(params.search_all_subfolders.clone()));
-            sql_params.push(Box::new(format!(
-                "{}{}%",
-                params.search_all_subfolders,
-                std::path::MAIN_SEPARATOR
-            )));
+            sql_params.push(Box::new(subtree_like_pattern(&params.search_all_subfolders)));
         }
 
         if !params.search_folder.is_empty() {
@@ -4115,6 +4761,10 @@ impl AFile {
             sql_params.push(Box::new(params.culling_flag));
         }
 
+        if params.tag_group_id > 0 {
+            conditions.push("EXISTS (SELECT 1 FROM afile_tags ft JOIN atags t ON t.id = ft.tag_id WHERE ft.file_id = a.id AND t.group_id = ?)".to_string());
+            sql_params.push(Box::new(params.tag_group_id));
+        }
         if params.tag_id > 0 {
             joins.push("INNER JOIN afile_tags at ON a.id = at.file_id");
             conditions.push("at.tag_id = ?".to_string());
@@ -4185,11 +4835,13 @@ impl AFile {
         // sort
         query.push_str(&format!(" ORDER BY {}", Self::build_order_clause(params)));
 
-        // paging
+        // A non-positive limit returns the complete result set. Virtualized views
+        // use positive limits; unified search needs all text matches.
         query.push_str(" LIMIT ? OFFSET ?");
+        let resolved_limit = if limit > 0 { limit } else { -1 };
 
         let mut final_params: Vec<&dyn ToSql> = sql_params.iter().map(|p| p.as_ref()).collect();
-        final_params.push(&limit);
+        final_params.push(&resolved_limit);
         final_params.push(&offset);
         Self::query_files(&query, &final_params)
     }
@@ -4530,6 +5182,61 @@ impl AFile {
         Ok(ids)
     }
 
+    /// Resolve a file's index in the flattened grouped result without loading
+    /// the ID list for every preceding group.
+    pub fn get_grouped_file_position(
+        params: &QueryParams,
+        file_id: i64,
+    ) -> Result<Option<i64>, String> {
+        if file_id <= 0 {
+            return Ok(None);
+        }
+        let Some((group_id_expr, _)) =
+            Self::group_key_and_sort_expr(params.group_by, params.calendar_sort)
+        else {
+            return Ok(None);
+        };
+
+        let (joins, where_clause, mut sql_params) = Self::build_search_query_parts(params);
+        let mut query = format!(
+            "SELECT {group_id_expr}
+             FROM afiles a
+             LEFT JOIN afolders b ON a.folder_id = b.id
+             LEFT JOIN albums c ON b.album_id = c.id
+             {joins}{where_clause}"
+        );
+        if where_clause.is_empty() {
+            query.push_str(" WHERE a.id = ?");
+        } else {
+            query.push_str(" AND a.id = ?");
+        }
+        sql_params.push(Box::new(file_id));
+
+        let final_params: Vec<&dyn ToSql> = sql_params.iter().map(|p| p.as_ref()).collect();
+        let conn = open_conn()?;
+        let group_id = conn
+            .query_row(&query, &final_params[..], |row| row.get::<_, String>(0))
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let Some(group_id) = group_id else {
+            return Ok(None);
+        };
+
+        let groups = Self::query_groups(params)?;
+        let Some(group_index) = groups.iter().position(|group| group.id == group_id) else {
+            return Ok(None);
+        };
+        let preceding_count = groups[..group_index]
+            .iter()
+            .map(|group| group.count)
+            .sum::<i64>();
+        let group_file_ids = Self::get_group_file_ids(params, &group_id)?;
+        Ok(group_file_ids
+            .iter()
+            .position(|id| *id == file_id)
+            .map(|index| preceding_count + index as i64))
+    }
+
     pub fn get_query_file_ids(params: &QueryParams) -> Result<Vec<i64>, String> {
         let (joins, where_clause, sql_params) = Self::build_search_query_parts(params);
         let mut query = format!(
@@ -4558,7 +5265,7 @@ impl AFile {
         Ok(ids)
     }
 
-    fn build_order_clause_values(sort_type: i64, sort_order: i64) -> String {
+    fn build_order_clause_values(sort_type: i64, sort_order: i64, random_seed: i64) -> String {
         let dir = if sort_order == 1 { "DESC" } else { "ASC" };
         match sort_type {
             0 => format!("a.taken_date {}, a.id {}", dir, dir),
@@ -4568,13 +5275,23 @@ impl AFile {
             4 => format!("a.size {}, a.id {}", dir, dir),
             5 => format!("a.width {}, a.height {}, a.id {}", dir, dir, dir),
             6 => format!("a.duration {}, a.id {}", dir, dir),
+            // A seed makes random order stable for every request in one virtualized
+            // result set, while a new query can supply a different order.
+            7 => {
+                // SQLite has no XOR operator. `(x | y) - (x & y)` is XOR for
+                // non-negative values, so the seed changes the full ordering
+                // instead of merely rotating it.
+                let id_hash = "((a.id * 1103515245 + 12345) & 2147483647)";
+                let seed = random_seed.rem_euclid(2_147_483_647);
+                format!("((({id_hash} | {seed}) - ({id_hash} & {seed}))), a.id")
+            }
             9 => "a.id ASC".to_string(), // internal: stable append order during scanning
             _ => format!("a.taken_date {}, a.id {}", dir, dir),
         }
     }
 
     fn build_order_clause(params: &QueryParams) -> String {
-        Self::build_order_clause_values(params.sort_type, params.sort_order)
+        Self::build_order_clause_values(params.sort_type, params.sort_order, params.random_seed)
     }
 
     fn smart_rule_string(value: &JsonValue) -> Option<String> {
@@ -4841,19 +5558,25 @@ impl AFile {
             "media_subtype" => {
                 let subtype = Self::smart_rule_string(value)
                     .ok_or_else(|| "Media subtype value required".to_string())?;
-                if !matches!(subtype.as_str(), "live_photo" | "raw_jpeg_pair") {
-                    return Err(format!("Unsupported media subtype: {}", subtype));
-                }
+                // "motion_photo" is the unified "dynamic photo" bucket that
+                // covers both Apple Live Photos and Android Motion Photos;
+                // "live_photo" maps to the same condition for backward
+                // compatibility with previously saved rules.
+                let (positive, negative) = match subtype.as_str() {
+                    "live_photo" | "motion_photo" => (
+                        "a.media_subtype IN ('live_photo', 'motion_photo')",
+                        "(a.media_subtype IS NULL OR a.media_subtype NOT IN ('live_photo', 'motion_photo'))",
+                    ),
+                    "raw_jpeg_pair" => (
+                        "a.media_subtype = 'raw_jpeg_pair'",
+                        "(a.media_subtype IS NULL OR a.media_subtype != 'raw_jpeg_pair')",
+                    ),
+                    other => return Err(format!("Unsupported media subtype: {}", other)),
+                };
                 if matches!(operator, "is_not" | "neq" | "not_in") {
-                    Ok(format!(
-                        "(a.media_subtype IS NULL OR a.media_subtype != '{}' OR a.live_photo_video_id IS NULL)",
-                        subtype
-                    ))
+                    Ok(negative.to_string())
                 } else if matches!(operator, "is" | "eq" | "in") {
-                    Ok(format!(
-                        "(a.media_subtype = '{}' AND a.live_photo_video_id IS NOT NULL)",
-                        subtype
-                    ))
+                    Ok(positive.to_string())
                 } else {
                     Err(format!("Unsupported media subtype operator: {}", operator))
                 }
@@ -5123,8 +5846,43 @@ impl AFile {
             )?);
         }
 
+        Self::append_album_filter(&mut conditions);
+
+        let inaccessible_album_ids = t_utils::inaccessible_album_ids();
+        if !inaccessible_album_ids.is_empty() {
+            conditions.push(format!(
+                "b.album_id NOT IN ({})",
+                inaccessible_album_ids
+                    .iter()
+                    .map(i64::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ));
+        }
+
         conditions.push(Self::search_exclusion_condition("b"));
         conditions.push(Self::live_photo_companion_exclusion_condition().to_string());
+
+        if let (Some(min_lat), Some(max_lat), Some(min_lon), Some(max_lon)) = (
+            params.gps_min_lat,
+            params.gps_max_lat,
+            params.gps_min_lon,
+            params.gps_max_lon,
+        ) {
+            conditions.push("a.gps_latitude BETWEEN ? AND ?".to_string());
+            sql_params.push(Box::new(min_lat));
+            sql_params.push(Box::new(max_lat));
+
+            if min_lon <= max_lon {
+                conditions.push("a.gps_longitude BETWEEN ? AND ?".to_string());
+                sql_params.push(Box::new(min_lon));
+                sql_params.push(Box::new(max_lon));
+            } else {
+                conditions.push("(a.gps_longitude >= ? OR a.gps_longitude <= ?)".to_string());
+                sql_params.push(Box::new(min_lon));
+                sql_params.push(Box::new(max_lon));
+            }
+        }
 
         let joiner = if params.r#match == "any" {
             " OR "
@@ -5183,7 +5941,7 @@ impl AFile {
         }
         query.push_str(&format!(
             " ORDER BY {}",
-            Self::build_order_clause_values(params.sort_type, params.sort_order)
+            Self::build_order_clause_values(params.sort_type, params.sort_order, params.random_seed)
         ));
         query.push_str(" LIMIT ? OFFSET ?");
 
@@ -5265,7 +6023,7 @@ impl AFile {
         query.push_str(" GROUP BY a.id");
         query.push_str(&format!(
             " ORDER BY {}",
-            Self::build_order_clause_values(params.sort_type, params.sort_order)
+            Self::build_order_clause_values(params.sort_type, params.sort_order, params.random_seed)
         ));
         query.push_str(" LIMIT ? OFFSET ?");
 
@@ -5323,7 +6081,7 @@ impl AFile {
         query.push_str(" GROUP BY a.id");
         query.push_str(&format!(
             " ORDER BY {}",
-            Self::build_order_clause_values(params.sort_type, params.sort_order)
+            Self::build_order_clause_values(params.sort_type, params.sort_order, params.random_seed)
         ));
 
         let final_params: Vec<&dyn ToSql> = sql_params.iter().map(|p| p.as_ref()).collect();
@@ -5354,7 +6112,7 @@ impl AFile {
         }
         query.push_str(&format!(
             " ORDER BY {}",
-            Self::build_order_clause_values(params.sort_type, params.sort_order)
+            Self::build_order_clause_values(params.sort_type, params.sort_order, params.random_seed)
         ));
 
         let final_params: Vec<&dyn ToSql> = sql_params.iter().map(|p| p.as_ref()).collect();
@@ -5392,7 +6150,7 @@ impl AFile {
                 {}
             )
             SELECT position FROM ranked_files WHERE id = ?",
-            Self::build_order_clause_values(params.sort_type, params.sort_order),
+            Self::build_order_clause_values(params.sort_type, params.sort_order, params.random_seed),
             joins,
             where_clause,
             if needs_group { " GROUP BY a.id" } else { "" }
@@ -5793,6 +6551,20 @@ impl AFile {
         query.push_str(" AND ");
         query.push_str(&Self::search_exclusion_condition("b"));
 
+        let inaccessible_album_ids = t_utils::inaccessible_album_ids();
+        if !inaccessible_album_ids.is_empty() {
+            query.push_str(&format!(
+                " AND b.album_id NOT IN ({})",
+                inaccessible_album_ids
+                    .iter()
+                    .map(i64::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ));
+        }
+
+        query.push_str(&Self::album_filter_sql("a"));
+
         if let Some(ft_condition) = Self::build_file_type_condition(params.file_type) {
             query.push_str(" AND ");
             query.push_str(&ft_condition);
@@ -5810,12 +6582,7 @@ impl AFile {
 
         let mut scores: Vec<(i64, f32)> = Vec::new();
 
-        // If search_text is present, force threshold to 0.25
-        let threshold = if !params.search_text.is_empty() {
-            0.25
-        } else {
-            params.threshold
-        };
+        let threshold = params.threshold.clamp(0.0, 1.0);
         let query_norm = embedding
             .iter()
             .map(|value| value * value)
@@ -5835,21 +6602,8 @@ impl AFile {
         // Sort by score descending
         scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-        // Limit
-        let limit = if params.limit > 0 {
-            params.limit as usize
-        } else {
-            scores.len()
-        };
-
-        let final_scores = if limit < scores.len() {
-            &scores[..limit]
-        } else {
-            &scores[..]
-        };
-
         // Fetch full file info in batches, then restore similarity order.
-        let result_ids = final_scores.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+        let result_ids = scores.iter().map(|(id, _)| *id).collect::<Vec<_>>();
         let files = Self::get_files_by_ids(&result_ids)?;
         let mut files_by_id = files
             .into_iter()
@@ -5866,7 +6620,12 @@ impl AFile {
     }
 
     fn cosine_similarity_blob(query: &[f32], query_norm: f32, blob: &[u8]) -> f32 {
-        if query_norm == 0.0 {
+        if query_norm == 0.0 || blob.len() % 4 != 0 {
+            return 0.0;
+        }
+
+        let file_len = blob.len() / 4;
+        if file_len != query.len() {
             return 0.0;
         }
 
@@ -5874,9 +6633,7 @@ impl AFile {
         let mut file_norm_squared = 0.0_f32;
         for (index, chunk) in blob.chunks_exact(4).enumerate() {
             let value = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-            if let Some(query_value) = query.get(index) {
-                dot_product += query_value * value;
-            }
+            dot_product += query[index] * value;
             file_norm_squared += value * value;
         }
 
@@ -5912,7 +6669,19 @@ pub struct AThumb {
     pub thumb_data_base64: Option<String>, // fetch thumbnail data as base64 string (for webview)
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThumbnailCacheCleanupResult {
+    pub files_removed: u64,
+    pub bytes_freed: u64,
+}
+
 impl AThumb {
+    const CACHE_EXTENSIONS: [&'static str; 2] = ["png", "jpg"];
+    // Cache files are written before their database row is updated. Keep recent
+    // unreferenced files so maintenance cannot race thumbnail generation.
+    const CLEANUP_MIN_FILE_AGE: Duration = Duration::from_secs(5 * 60);
+
     fn should_use_original_image(file_id: i64, file_type: i64, thumbnail_size: u32) -> bool {
         if file_type != 1 || thumbnail_size == 0 {
             return false;
@@ -5954,8 +6723,11 @@ impl AThumb {
         data.starts_with(&[0xFF, 0xD8, 0xFF]) && data.ends_with(&[0xFF, 0xD9])
     }
 
-    fn generation_lock_key(file_id: i64, thumbnail_size: u32) -> String {
-        format!("{}:{}", file_id, thumbnail_size)
+    fn generation_lock_key(file_id: i64, _thumbnail_size: u32) -> String {
+        // A file has one active thumbnail record. Serializing every size for a
+        // file prevents an older in-flight request from overwriting a newer
+        // thumbnail-size selection.
+        file_id.to_string()
     }
 
     fn acquire_generation_guard(file_id: i64, thumbnail_size: u32) -> ThumbGenerationGuard {
@@ -6019,15 +6791,35 @@ impl AThumb {
         thumbnail_size: u32,
         source_mtime: Option<i64>,
         orientation: i32,
+        raw_thumbnail_source: Option<RawDisplayOptions>,
     ) -> String {
         let mut hasher = blake3::Hasher::new();
         hasher.update(b"lap-thumb-v1");
         hasher.update(library_id.as_bytes());
         hasher.update(&file_id.to_le_bytes());
         hasher.update(&thumbnail_size.to_le_bytes());
+        let orientation = if raw_thumbnail_source.is_some() && orientation == 0 { 1 } else { orientation };
         hasher.update(&orientation.to_le_bytes());
         hasher.update(&source_mtime.unwrap_or_default().to_le_bytes());
-        hasher.finalize().to_hex().to_string()
+        if let Some(prefer_embedded) = raw_thumbnail_source {
+            hasher.update(prefer_embedded.cache_tag().as_bytes());
+            if let Some(companion) = crate::t_raw_display::paired_file(file_id, prefer_embedded) {
+                hasher.update(&companion.id.unwrap_or_default().to_le_bytes());
+                if let Some(path) = companion.file_path.as_deref() {
+                    hasher.update(path.as_bytes());
+                    if let Ok(metadata) = fs::metadata(path) {
+                        hasher.update(&metadata.len().to_le_bytes());
+                        let modified = metadata.modified().ok().and_then(|time| time.duration_since(UNIX_EPOCH).ok());
+                        hasher.update(&modified.map(|time| time.as_nanos()).unwrap_or_default().to_le_bytes());
+                    }
+                }
+            }
+        }
+        let hash = hasher.finalize().to_hex().to_string();
+        match raw_thumbnail_source {
+            Some(options) => format!("{}{}", if options.embedded() { if options.auto_bright { 'b' } else { 'e' } } else if options.auto_bright { 'a' } else { 'r' }, hash),
+            None => hash,
+        }
     }
 
     fn get_file_album_id(file_id: i64) -> Result<Option<i64>, String> {
@@ -6054,31 +6846,33 @@ impl AThumb {
             .join(format!("{}.{}", thumb_key, extension)))
     }
 
-    fn thumbnail_extension(file_path: &str) -> &'static str {
-        if t_image::should_use_png_thumbnail(file_path) {
-            "png"
-        } else {
-            "jpg"
-        }
-    }
-
     fn read_thumb_cache_bytes(
         library_id: &str,
         album_id: i64,
         thumb_key: &str,
-        extension: &str,
+        preferred_extension: &str,
     ) -> Result<Option<Vec<u8>>, String> {
-        let path = Self::get_thumb_cache_path_for_key(library_id, album_id, thumb_key, extension)?;
-        if !path.exists() {
-            return Ok(None);
-        }
-        let data = fs::read(path).map_err(|e| e.to_string())?;
-        let is_valid = match extension {
-            "png" => Self::is_png_bytes(&data),
-            "jpg" => Self::is_complete_jpeg(&data),
-            _ => false,
+        let extensions = if preferred_extension == "png" {
+            Self::CACHE_EXTENSIONS
+        } else {
+            ["jpg", "png"]
         };
-        Ok(is_valid.then_some(data))
+        for extension in extensions {
+            let path =
+                Self::get_thumb_cache_path_for_key(library_id, album_id, thumb_key, extension)?;
+            if !path.exists() {
+                continue;
+            }
+            let data = fs::read(path).map_err(|e| e.to_string())?;
+            if match extension {
+                "png" => Self::is_png_bytes(&data),
+                "jpg" => Self::is_complete_jpeg(&data),
+                _ => false,
+            } {
+                return Ok(Some(data));
+            }
+        }
+        Ok(None)
     }
 
     fn write_thumb_cache_bytes(
@@ -6124,12 +6918,167 @@ impl AThumb {
         library_id: &str,
         album_id: i64,
         thumb_key: &str,
-        extension: &str,
     ) {
-        if let Ok(path) =
-            Self::get_thumb_cache_path_for_key(library_id, album_id, thumb_key, extension)
-        {
-            let _ = fs::remove_file(path);
+        for extension in Self::CACHE_EXTENSIONS {
+            if let Ok(path) =
+                Self::get_thumb_cache_path_for_key(library_id, album_id, thumb_key, extension)
+            {
+                let _ = fs::remove_file(path);
+            }
+        }
+    }
+
+    /// Remove cache files no longer referenced by the target library's `athumbs`
+    /// table. When `library_id` is None (or empty), falls back to the current
+    /// library. Only jpg/png files under that library's cache directory and
+    /// older than `CLEANUP_MIN_FILE_AGE` are considered.
+    pub fn clean_unused_cache(library_id: Option<&str>) -> Result<ThumbnailCacheCleanupResult, String> {
+        // Resolve target library: explicit id (any library) or current (legacy behavior).
+        let target_library_id = match library_id {
+            Some(id) if !id.is_empty() => id.to_string(),
+            _ => Self::get_current_library_id(),
+        };
+
+        // Read referenced thumb_keys from the target library's DB. When it's the
+        // current library, reuse the pooled connection; otherwise open a transient
+        // connection to that library's DB file (same pattern as get_library_info).
+        let referenced_keys: HashSet<String> = if target_library_id == Self::get_current_library_id() {
+            let conn = open_conn()?;
+            let mut stmt = conn
+                .prepare("SELECT thumb_key FROM athumbs WHERE thumb_key IS NOT NULL")
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map([], |row| row.get(0))
+                .map_err(|e| e.to_string())?;
+            rows.map(|row| row.map_err(|e| e.to_string()))
+                .collect::<Result<HashSet<String>, String>>()?
+        } else {
+            let _lease = t_storage::DbConnectionLease::acquire()?;
+            let db_path = crate::t_storage::get_library_db_path(&target_library_id)?;
+            let conn = rusqlite::Connection::open(&db_path)
+                .map_err(|e| format!("Failed to open library DB: {}", e))?;
+            let mut stmt = conn
+                .prepare("SELECT thumb_key FROM athumbs WHERE thumb_key IS NOT NULL")
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map([], |row| row.get(0))
+                .map_err(|e| e.to_string())?;
+            rows.map(|row| row.map_err(|e| e.to_string()))
+                .collect::<Result<HashSet<String>, String>>()?
+        };
+
+        let cache_root = t_config::get_app_cache_dir()?.join(&target_library_id);
+        if !cache_root.is_dir() {
+            return Ok(ThumbnailCacheCleanupResult {
+                files_removed: 0,
+                bytes_freed: 0,
+            });
+        }
+
+        let mut result = ThumbnailCacheCleanupResult {
+            files_removed: 0,
+            bytes_freed: 0,
+        };
+        for entry in WalkDir::new(cache_root).into_iter().filter_map(|entry| entry.ok()) {
+            if !entry.file_type().is_file()
+                || !matches!(entry.path().extension().and_then(|ext| ext.to_str()), Some("jpg" | "png"))
+            {
+                continue;
+            }
+
+            let Some(thumb_key) = entry.path().file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
+            if referenced_keys.contains(thumb_key) {
+                continue;
+            }
+
+            let Ok(metadata) = entry.metadata() else {
+                continue;
+            };
+            let is_old_enough = metadata
+                .modified()
+                .ok()
+                .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+                .is_some_and(|age| age >= Self::CLEANUP_MIN_FILE_AGE);
+            if !is_old_enough {
+                continue;
+            }
+
+            let byte_count = metadata.len();
+            if fs::remove_file(entry.path()).is_ok() {
+                result.files_removed += 1;
+                result.bytes_freed += byte_count;
+            }
+        }
+
+        Ok(result)
+    }
+
+    fn relocate_thumb_cache_for_key(
+        library_id: &str,
+        thumb_key: &str,
+        old_album_id: i64,
+        new_album_id: i64,
+    ) -> Result<(), String> {
+        for extension in Self::CACHE_EXTENSIONS {
+            let old_path = Self::get_thumb_cache_path_for_key(
+                library_id,
+                old_album_id,
+                thumb_key,
+                extension,
+            )?;
+            if !old_path.exists() {
+                continue;
+            }
+
+            let new_path = Self::get_thumb_cache_path_for_key(
+                library_id,
+                new_album_id,
+                thumb_key,
+                extension,
+            )?;
+            if let Some(parent) = new_path.parent() {
+                fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+
+            if fs::rename(&old_path, &new_path).is_err() {
+                fs::copy(&old_path, &new_path).map_err(|e| e.to_string())?;
+                let _ = fs::remove_file(old_path);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn get_thumb_keys_in_subtree(folder_path: &str) -> Result<Vec<String>, String> {
+        let conn = open_conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT t.thumb_key FROM athumbs t
+                 JOIN afiles a ON t.file_id = a.id
+                 JOIN afolders b ON a.folder_id = b.id
+                 WHERE t.thumb_key IS NOT NULL AND (b.path = ?1 OR b.path LIKE ?2 ESCAPE '\\')",
+            )
+            .map_err(|e| e.to_string())?;
+        let pattern = subtree_like_pattern(folder_path);
+        let rows = stmt
+            .query_map(params![folder_path, pattern], |row| row.get(0))
+            .map_err(|e| e.to_string())?;
+        rows.map(|row| row.map_err(|e| e.to_string())).collect()
+    }
+
+    pub fn relocate_for_thumb_keys(thumb_keys: &[String], old_album_id: i64, new_album_id: i64) {
+        if old_album_id == new_album_id {
+            return;
+        }
+
+        let library_id = Self::get_current_library_id();
+        for thumb_key in thumb_keys {
+            if let Err(error) =
+                Self::relocate_thumb_cache_for_key(&library_id, thumb_key, old_album_id, new_album_id)
+            {
+                eprintln!("Error while relocating folder thumbnail cache: {}", error);
+            }
         }
     }
 
@@ -6145,29 +7094,8 @@ impl AThumb {
         let Some(thumb_key) = Self::fetch_thumb_key(file_id)? else {
             return Ok(());
         };
-        let extension = AFile::get_file_info(file_id)?
-            .and_then(|file| file.file_path)
-            .map(|file_path| Self::thumbnail_extension(&file_path))
-            .unwrap_or("jpg");
-
         let library_id = Self::get_current_library_id();
-        let old_path =
-            Self::get_thumb_cache_path_for_key(&library_id, old_album_id, &thumb_key, extension)?;
-        if !old_path.exists() {
-            return Ok(());
-        }
-
-        let new_path =
-            Self::get_thumb_cache_path_for_key(&library_id, new_album_id, &thumb_key, extension)?;
-        if let Some(parent) = new_path.parent() {
-            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-
-        if fs::rename(&old_path, &new_path).is_err() {
-            fs::copy(&old_path, &new_path).map_err(|e| e.to_string())?;
-            let _ = fs::remove_file(old_path);
-        }
-        Ok(())
+        Self::relocate_thumb_cache_for_key(&library_id, &thumb_key, old_album_id, new_album_id)
     }
 
     /// Create a new thumbnail struct
@@ -6177,10 +7105,29 @@ impl AThumb {
         file_type: i64,
         orientation: i32,
         thumbnail_size: u32,
+        prefer_embedded_raw_thumbnail: RawDisplayOptions,
         library_id: &str,
         known_duration: Option<u64>,
         seek_percent: Option<u8>,
     ) -> Result<Option<Self>, String> {
+        if file_type == 3 {
+            if let Some(companion) = crate::t_raw_display::paired_file(file_id, prefer_embedded_raw_thumbnail) {
+                if let (Some(companion_id), Some(path)) = (companion.id, companion.file_path.as_deref()) {
+                    if let Ok(Some(mut thumb)) = Self::new_for_library(
+                        companion_id, path, 1, companion.e_orientation.unwrap_or(1) as i32,
+                        thumbnail_size, RawDisplayOptions::default(), library_id, None, None,
+                    ) {
+                        if thumb.error_code == 0 && thumb.thumb_data.is_some() {
+                            thumb.file_id = file_id;
+                            thumb.thumb_mtime = Self::get_source_mtime(file_path);
+                            thumb.thumb_key = Some(Self::build_thumb_key(library_id, file_id, thumbnail_size,
+                                thumb.thumb_mtime, orientation, Some(prefer_embedded_raw_thumbnail)));
+                            return Ok(Some(thumb));
+                        }
+                    }
+                }
+            }
+        }
         let (thumb_data, error_code) = match file_type {
             1 => {
                 // image
@@ -6231,7 +7178,12 @@ impl AThumb {
             }
             3 => {
                 // raw image
-                match t_image::get_raw_thumbnail(file_path, orientation, thumbnail_size) {
+                match t_image::get_raw_thumbnail(
+                    file_path,
+                    orientation,
+                    thumbnail_size,
+                    prefer_embedded_raw_thumbnail,
+                ) {
                     Ok(Some(data)) => (Some(data), 0),
                     Ok(None) => (None, 1),
                     Err(_) => (None, 1),
@@ -6241,13 +7193,16 @@ impl AThumb {
         };
 
         let thumb_mtime = Self::get_source_mtime(file_path);
-        let thumb_key = thumb_data.as_ref().map(|_| {
+        // Retain the policy key on RAW failures too, so another policy retries
+        // while repeated requests for the same broken source remain cached.
+        let thumb_key = (file_type == 3 || thumb_data.is_some()).then(|| {
             Self::build_thumb_key(
                 library_id,
                 file_id,
                 thumbnail_size,
                 thumb_mtime,
                 orientation,
+                (file_type == 3).then_some(prefer_embedded_raw_thumbnail),
             )
         });
 
@@ -6412,11 +7367,21 @@ impl AThumb {
         Ok(thumbs)
     }
 
-    fn is_stale(&self, file_path: &str, thumbnail_size: u32) -> bool {
-        if self.thumb_size != Some(thumbnail_size as i64) {
-            return true;
+    fn raw_display_is_stale(&self, file_path: &str, orientation: i32, options: RawDisplayOptions) -> bool {
+        if t_utils::get_file_type(file_path) != Some(3) {
+            return false;
         }
+        // Preserve offline-library thumbnails; regenerate once the source returns.
+        if !std::path::Path::new(file_path).is_file() { return false; }
+        let key = Self::build_thumb_key(&Self::get_current_library_id(), self.file_id,
+            self.thumb_size.unwrap_or(512).max(1) as u32, Self::get_source_mtime(file_path),
+            orientation, Some(options));
+        self.thumb_key.as_deref() != Some(key.as_str())
+    }
 
+    fn is_stale(&self, file_path: &str, _thumbnail_size: u32) -> bool {
+        // A quality setting change must not invalidate the existing cache while
+        // browsing. Explicit refresh actions regenerate at the requested size.
         let current_mtime = Self::get_source_mtime(file_path);
         match (self.thumb_mtime, current_mtime) {
             (Some(cached_mtime), Some(source_mtime)) => cached_mtime != source_mtime,
@@ -6425,6 +7390,46 @@ impl AThumb {
             // Keep existing thumbnails so they work again when the path returns.
             (_, None) => false,
         }
+    }
+
+    /// Whether an explicit album re-scan should regenerate this thumbnail at
+    /// the currently selected size and RAW thumbnail source.
+    pub fn needs_thumbnail_regeneration(
+        file_id: i64,
+        thumbnail_size: u32,
+        prefer_embedded_raw_thumbnail: RawDisplayOptions,
+    ) -> bool {
+        Self::fetch(file_id)
+            .ok()
+            .flatten()
+            .is_some_and(|thumbnail| {
+                if thumbnail.error_code == 2 {
+                    return false;
+                }
+
+                let size_changed = thumbnail.thumb_size != Some(thumbnail_size as i64);
+
+                let Ok(Some(file)) = AFile::get_file_info(file_id) else {
+                    return size_changed;
+                };
+                if file.file_type.unwrap_or(0) != 3 {
+                    return size_changed;
+                }
+
+                if size_changed {
+                    return true;
+                }
+
+                let expected_key = Self::build_thumb_key(
+                    &Self::get_current_library_id(),
+                    file_id,
+                    thumbnail_size,
+                    file.file_path.as_deref().and_then(Self::get_source_mtime),
+                    file.e_orientation.unwrap_or(1) as i32,
+                    Some(prefer_embedded_raw_thumbnail),
+                );
+                thumbnail.thumb_key.as_deref() != Some(expected_key.as_str())
+            })
     }
 
     fn fetch_thumb_key(file_id: i64) -> Result<Option<String>, String> {
@@ -6461,6 +7466,7 @@ impl AThumb {
                 thumbnail_size,
                 thumb_mtime,
                 orientation,
+                None,
             )
         });
 
@@ -6525,6 +7531,7 @@ impl AThumb {
         file_type: i64,
         orientation: i32,
         thumbnail_size: u32,
+        prefer_embedded_raw_thumbnail: RawDisplayOptions,
         library_id: &str,
         known_duration: Option<u64>,
         seek_percent: Option<u8>,
@@ -6551,6 +7558,7 @@ impl AThumb {
             file_type,
             orientation,
             thumbnail_size,
+            prefer_embedded_raw_thumbnail,
             library_id,
             known_duration,
             seek_percent,
@@ -6589,6 +7597,7 @@ impl AThumb {
         file_type: i64,
         orientation: i32,
         thumbnail_size: u32,
+        prefer_embedded_raw_thumbnail: RawDisplayOptions,
         known_duration: Option<u64>,
         seek_percent: Option<u8>,
     ) -> Result<Option<Self>, String> {
@@ -6599,6 +7608,7 @@ impl AThumb {
             file_type,
             orientation,
             thumbnail_size,
+            prefer_embedded_raw_thumbnail,
             &library_id,
             known_duration,
             seek_percent,
@@ -6610,6 +7620,7 @@ impl AThumb {
         file_path: &str,
         thumbnail_size: u32,
         orientation: i32,
+        prefer_embedded_raw_thumbnail: RawDisplayOptions,
         force_regenerate: bool,
     ) -> Result<Option<Self>, String> {
         if force_regenerate {
@@ -6618,6 +7629,10 @@ impl AThumb {
         }
 
         if let Ok(Some(thumbnail)) = Self::fetch(file_id) {
+            if thumbnail.raw_display_is_stale(file_path, orientation, prefer_embedded_raw_thumbnail) {
+                let _ = Self::delete(file_id);
+                return Ok(None);
+            }
             if thumbnail.error_code == 1 {
                 if thumbnail.is_stale(file_path, thumbnail_size) {
                     let _ = Self::delete(file_id);
@@ -6651,13 +7666,19 @@ impl AThumb {
         file_path: &str,
         thumbnail_size: u32,
         orientation: i32,
+        prefer_embedded_raw_thumbnail: RawDisplayOptions,
         force_regenerate: bool,
+        trust_cached: bool,
     ) -> Result<Option<Self>, String> {
         if force_regenerate {
             let _ = Self::delete(thumbnail.file_id);
             return Ok(None);
         }
 
+        if thumbnail.raw_display_is_stale(file_path, orientation, prefer_embedded_raw_thumbnail) {
+            let _ = Self::delete(thumbnail.file_id);
+            return Ok(None);
+        }
         if thumbnail.error_code == 1 {
             if thumbnail.is_stale(file_path, thumbnail_size) {
                 let _ = Self::delete(thumbnail.file_id);
@@ -6670,7 +7691,7 @@ impl AThumb {
             return Ok(Some(thumbnail));
         }
 
-        if thumbnail.is_stale(file_path, thumbnail_size) {
+        if !trust_cached && thumbnail.is_stale(file_path, thumbnail_size) {
             let _ = Self::delete(thumbnail.file_id);
             return Ok(None);
         }
@@ -6691,6 +7712,7 @@ impl AThumb {
         file_type: i64,
         orientation: i32,
         thumbnail_size: u32,
+        prefer_embedded_raw_thumbnail: RawDisplayOptions,
         album_id: i64,
         force_regenerate: bool,
         seek_percent: Option<u8>,
@@ -6700,6 +7722,14 @@ impl AThumb {
         }
 
         tauri::async_runtime::spawn(async move {
+            let Ok(_generation_permit) = thumb_background_generation_permits()
+                .acquire_owned()
+                .await
+            else {
+                Self::finish_background_task(file_id, thumbnail_size);
+                return;
+            };
+
             let generated = tauri::async_runtime::spawn_blocking(move || {
                 let duration = if file_type == 2 {
                     AFile::get_file_info(file_id)
@@ -6716,6 +7746,7 @@ impl AThumb {
                     file_type,
                     orientation,
                     thumbnail_size,
+                    prefer_embedded_raw_thumbnail,
                     force_regenerate,
                     duration,
                     seek_percent,
@@ -6729,6 +7760,7 @@ impl AThumb {
                     serde_json::json!({
                         "album_id": album_id,
                         "file_ids": [file_id],
+                        "invalidate": force_regenerate,
                     }),
                 );
             }
@@ -6744,6 +7776,7 @@ impl AThumb {
         file_type: i64,
         orientation: i32,
         thumbnail_size: u32,
+        prefer_embedded_raw_thumbnail: RawDisplayOptions,
         force_regenerate: bool,
         known_duration: Option<u64>,
         seek_percent: Option<u8>,
@@ -6751,7 +7784,14 @@ impl AThumb {
         if force_regenerate {
             let _ = Self::delete(file_id);
         } else if let Some(thumb) =
-            Self::get_thumb_if_available(file_id, file_path, thumbnail_size, orientation, false)?
+            Self::get_thumb_if_available(
+                file_id,
+                file_path,
+                thumbnail_size,
+                orientation,
+                prefer_embedded_raw_thumbnail,
+                false,
+            )?
         {
             if thumb.error_code != 1 {
                 return Ok(Some(thumb));
@@ -6766,6 +7806,7 @@ impl AThumb {
                 file_path,
                 thumbnail_size,
                 orientation,
+                prefer_embedded_raw_thumbnail,
                 false,
             )? {
                 if hydrated.error_code != 1 {
@@ -6780,6 +7821,7 @@ impl AThumb {
             file_type,
             orientation,
             thumbnail_size,
+            prefer_embedded_raw_thumbnail,
             known_duration,
             seek_percent,
         )
@@ -6799,6 +7841,7 @@ impl AThumb {
             file_type,
             orientation,
             512,
+            RawDisplayOptions::default(),
             false,
             None,
             None,
@@ -6849,6 +7892,15 @@ impl AThumb {
             let file_type = file.file_type.unwrap_or(0);
             let orientation = file.e_orientation.unwrap_or(1) as i32;
             let thumbnail_size = thumb.thumb_size.unwrap_or(200).max(1) as u32;
+            let prefer_embedded_raw_thumbnail = thumb
+                .thumb_key
+                .as_deref()
+                .map(|key| RawDisplayOptions {
+                    mode: if key.starts_with('e') || key.starts_with('b') { crate::t_raw_display::RawPreviewMode::Embedded } else { crate::t_raw_display::RawPreviewMode::Rendered },
+                    auto_bright: key.starts_with('a') || key.starts_with('b'),
+                    prefer_pair: false,
+                })
+                .unwrap_or_default();
 
             return Ok(Self::create_cache_backed_thumb_for_library(
                 file_id,
@@ -6856,6 +7908,7 @@ impl AThumb {
                 file_type,
                 orientation,
                 thumbnail_size,
+                prefer_embedded_raw_thumbnail,
                 library_id,
                 file.duration.map(|d| d as u64),
                 None,
@@ -6871,13 +7924,8 @@ impl AThumb {
         if let Ok(Some(key)) = Self::fetch_thumb_key(file_id) {
             let library_id = Self::get_current_library_id();
             if let Ok(Some(file)) = AFile::get_file_info(file_id) {
-                if let (Some(album_id), Some(file_path)) = (file.album_id, file.file_path) {
-                    Self::delete_thumb_cache_for_key(
-                        &library_id,
-                        album_id,
-                        &key,
-                        Self::thumbnail_extension(&file_path),
-                    );
+                if let Some(album_id) = file.album_id {
+                    Self::delete_thumb_cache_for_key(&library_id, album_id, &key);
                 }
             }
         }
@@ -6923,6 +7971,8 @@ pub struct ATag {
     pub id: i64,
     pub name: String,
     pub count: Option<i64>,
+    pub group_id: i64,
+    pub group_name: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -6944,57 +7994,56 @@ impl ATag {
             id: row.get(0)?,
             name: row.get(1)?,
             count: row.get(2)?,
+            group_id: row.get(3)?,
+            group_name: row.get(4)?,
         })
     }
 
-    /// Add a new tag. If the tag already exists, return the existing one.
-    pub fn add(name: &str) -> Result<Self, String> {
-        let conn = open_conn()?;
-        // First, try to fetch the tag to see if it already exists.
-        let existing_tag = conn
-            .query_row(
-                "SELECT id, name, 0 as count FROM atags WHERE name = ?1",
-                params![name],
-                Self::from_row,
-            )
-            .optional()
-            .map_err(|e| e.to_string())?;
-
-        if let Some(tag) = existing_tag {
-            Ok(tag)
-        } else {
-            // The tag doesn't exist, so insert it.
-            conn.execute("INSERT INTO atags (name) VALUES (?1)", params![name])
-                .map_err(|e| e.to_string())?;
-            let id = conn.last_insert_rowid();
-            Ok(Self {
-                id,
-                name: name.to_string(),
-                count: Some(0),
-            })
+    pub fn add(name: &str, group_id: Option<i64>) -> Result<Self, String> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() || trimmed.chars().count() > 255 {
+            return Err("Tag name must contain 1–255 characters".to_string());
         }
+        let mut conn = open_conn()?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        let group_id: i64 = match group_id {
+            Some(id) => id,
+            None => tx.query_row("SELECT id FROM atag_groups WHERE is_default = 1", [], |r| r.get(0)).map_err(|e| e.to_string())?,
+        };
+        let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM atags WHERE name = ? COLLATE NOCASE)", [trimmed], |r| r.get(0)).map_err(|e| e.to_string())?;
+        if exists { return Err("A tag with this name already exists".to_string()); }
+        tx.execute("INSERT INTO atags(name, group_id) VALUES (?1, ?2)", params![trimmed, group_id]).map_err(|e| e.to_string())?;
+        let tag = tx.query_row("SELECT t.id, t.name, 0, t.group_id, g.name FROM atags t JOIN atag_groups g ON g.id = t.group_id WHERE t.id = ?", [tx.last_insert_rowid()], Self::from_row).map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(tag)
     }
 
     /// Get all tags from the db
     pub fn get_all(sort: i64) -> Result<Vec<Self>, String> {
         let conn = open_conn()?;
+        // Count-based ordering must match the sidebar badge count (which comes
+        // from getQueryCountAndSum with tagId): tagged files excluding Live Photo
+        // videos and honoring album exclusions. The displayed count itself is
+        // populated lazily, so this expression is only used for ordering.
+        let count_expr = format!(
+            "(SELECT COUNT(*) FROM afile_tags ft
+              JOIN afiles a ON a.id = ft.file_id
+              JOIN afolders b ON b.id = a.folder_id
+              WHERE ft.tag_id = atags.id AND {}{}{} AND {})",
+            AFile::live_photo_companion_exclusion_condition(),
+            AFile::album_filter_sql("a"),
+            AFile::inaccessible_album_filter("b"),
+            AFile::search_exclusion_condition("b"),
+        );
         let order_clause = match sort {
-            1 => "atags.name DESC",
-            2 => "count ASC, atags.name ASC",
-            3 => "count DESC, atags.name ASC",
-            _ => "atags.name ASC",
+            1 => "atags.name DESC".to_string(),
+            2 => format!("{count_expr} ASC, atags.name ASC"),
+            3 => format!("{count_expr} DESC, atags.name ASC"),
+            _ => "atags.name ASC".to_string(),
         };
-        let query = "SELECT atags.id, atags.name, SUM(CASE WHEN afiles.id IS NOT NULL THEN 1 ELSE 0 END) AS count 
-            FROM atags 
-            LEFT JOIN afile_tags ON atags.id = afile_tags.tag_id
-            LEFT JOIN afiles ON afile_tags.file_id = afiles.id
-                AND afiles.id NOT IN (
-                    SELECT live_photo_video_id FROM afiles WHERE live_photo_video_id IS NOT NULL
-                )
-            GROUP BY atags.id
-            ORDER BY "
-            .to_string()
-            + order_clause;
+        let query = format!(
+            "SELECT atags.id, atags.name, 0 AS count, atags.group_id, g.name FROM atags JOIN atag_groups g ON g.id = atags.group_id ORDER BY {order_clause}",
+        );
         let mut stmt = conn.prepare(query.as_str()).map_err(|e| e.to_string())?;
 
         let tags_iter = stmt
@@ -7008,13 +8057,60 @@ impl ATag {
         Ok(tags)
     }
 
+    /// Count visible files for every tag in one grouped query.
+    pub fn get_counts() -> Result<HashMap<i64, i64>, String> {
+        let conn = open_conn()?;
+        let query = format!(
+            "SELECT ft.tag_id, COUNT(DISTINCT a.id)
+             FROM afile_tags ft
+             JOIN afiles a ON a.id = ft.file_id
+             JOIN afolders b ON b.id = a.folder_id
+             WHERE {}{}{} AND {}
+             GROUP BY ft.tag_id",
+            AFile::live_photo_companion_exclusion_condition(),
+            AFile::album_filter_sql("a"),
+            AFile::inaccessible_album_filter("b"),
+            AFile::search_exclusion_condition("b"),
+        );
+        let mut stmt = conn.prepare(&query).map_err(|e| e.to_string())?;
+        let rows = stmt.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<HashMap<_, _>, _>>().map_err(|e| e.to_string())
+    }
+
+    /// Count distinct visible files for every tag group.
+    pub fn get_group_counts() -> Result<HashMap<i64, i64>, String> {
+        Self::get_group_counts_on(&*open_conn()?)
+    }
+
+    fn get_group_counts_on(conn: &Connection) -> Result<HashMap<i64, i64>, String> {
+        let query = format!(
+            "SELECT t.group_id, COUNT(DISTINCT a.id)
+             FROM afile_tags ft
+             JOIN atags t ON t.id = ft.tag_id
+             JOIN afiles a ON a.id = ft.file_id
+             JOIN afolders b ON b.id = a.folder_id
+             WHERE {}{}{} AND {}
+             GROUP BY t.group_id",
+            AFile::live_photo_companion_exclusion_condition(),
+            AFile::album_filter_sql("a"),
+            AFile::inaccessible_album_filter("b"),
+            AFile::search_exclusion_condition("b"),
+        );
+        let mut stmt = conn.prepare(&query).map_err(|e| e.to_string())?;
+        let rows = stmt.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<HashMap<_, _>, _>>().map_err(|e| e.to_string())
+    }
+
     /// Get tag name by id
-    pub fn get_name(tag_id: i64) -> Result<String, String> {
+    pub fn get_name(tag_id: i64, include_group: bool) -> Result<String, String> {
         let conn = open_conn()?;
         let result = conn
             .query_row(
-                "SELECT name FROM atags WHERE id = ?1",
-                params![tag_id],
+                "SELECT CASE WHEN ?2 THEN g.name || ' > ' || t.name ELSE t.name END
+                 FROM atags t LEFT JOIN atag_groups g ON g.id = t.group_id WHERE t.id = ?1",
+                params![tag_id, include_group],
                 |row| row.get(0),
             )
             .map_err(|e| e.to_string())?;
@@ -7026,8 +8122,9 @@ impl ATag {
         let conn = open_conn()?;
         let mut stmt = conn
             .prepare(
-                "SELECT t.id, t.name, 0 as count
+                "SELECT t.id, t.name, 0 as count, t.group_id, g.name
                 FROM atags t
+                JOIN atag_groups g ON g.id = t.group_id
                 INNER JOIN afile_tags ft ON t.id = ft.tag_id
                 WHERE ft.file_id = ?1
                 ORDER BY t.name ASC",
@@ -7107,14 +8204,7 @@ impl ATag {
         .map_err(|e| e.to_string())?;
         tx.execute("DELETE FROM selected_file_ids", [])
             .map_err(|e| e.to_string())?;
-        {
-            let mut stmt = tx
-                .prepare_cached("INSERT OR IGNORE INTO selected_file_ids (id) VALUES (?1)")
-                .map_err(|e| e.to_string())?;
-            for file_id in file_ids {
-                stmt.execute(params![file_id]).map_err(|e| e.to_string())?;
-            }
-        }
+        populate_selected_file_ids(&tx, file_ids)?;
 
         let counts = {
             let mut stmt = tx
@@ -7211,20 +8301,60 @@ impl ATag {
 
     /// Delete a tag from the database. This will also remove all its associations with files.
     pub fn delete(tag_id: i64) -> Result<usize, String> {
-        let conn = open_conn()?;
-        let result = conn
+        let mut conn = open_conn()?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        let file_ids = {
+            let mut stmt = tx
+                .prepare("SELECT file_id FROM afile_tags WHERE tag_id = ?1")
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map(params![tag_id], |row| row.get::<_, i64>(0))
+                .map_err(|e| e.to_string())?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?
+        };
+        let result = tx
             .execute("DELETE FROM atags WHERE id = ?1", params![tag_id])
             .map_err(|e| e.to_string())?;
+        if result > 0 {
+            let mut stmt = tx
+                .prepare_cached(
+                    "UPDATE afiles
+                     SET has_tags = EXISTS (
+                         SELECT 1 FROM afile_tags WHERE afile_tags.file_id = afiles.id
+                     )
+                     WHERE id = ?1",
+                )
+                .map_err(|e| e.to_string())?;
+            for file_id in file_ids {
+                stmt.execute(params![file_id]).map_err(|e| e.to_string())?;
+            }
+        }
+        tx.commit().map_err(|e| e.to_string())?;
         Ok(result)
     }
 
     /// Rename a tag
     pub fn rename(tag_id: i64, new_name: &str) -> Result<usize, String> {
+        let trimmed = new_name.trim();
+        if trimmed.is_empty() {
+            return Err("Tag name cannot be empty".to_string());
+        }
         let conn = open_conn()?;
+        let existing: Option<i64> = conn
+            .query_row(
+                "SELECT id FROM atags WHERE name = ?1 COLLATE NOCASE AND id != ?2",
+                params![trimmed, tag_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        if existing.is_some() {
+            return Err("A tag with this name already exists".to_string());
+        }
         let result = conn
             .execute(
                 "UPDATE atags SET name = ?1 WHERE id = ?2",
-                params![new_name, tag_id],
+                params![trimmed, tag_id],
             )
             .map_err(|e| e.to_string())?;
         Ok(result)
@@ -7245,6 +8375,26 @@ pub struct PersonPage {
     pub persons: Vec<Person>,
     pub has_more: bool,
     pub total: usize,
+    pub visible_total: Option<usize>,
+    pub selected_person_visible: Option<bool>,
+}
+
+/// Pagination request for the People sidebar.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonPageRequest {
+    pub sort: i64,
+    pub offset: usize,
+    pub limit: usize,
+    pub search: String,
+    pub refresh_summary: Option<PersonPageRefreshSummary>,
+}
+
+/// Aggregate data requested when refreshing the People sidebar.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonPageRefreshSummary {
+    pub selected_person_id: Option<i64>,
 }
 
 impl Person {
@@ -7293,31 +8443,131 @@ impl Person {
         Ok(persons)
     }
 
-    pub fn get_page(sort: i64, offset: usize, limit: usize) -> Result<PersonPage, String> {
+    /// Get a single person's face thumbnail by id (Base64).
+    /// Prefers the pre-stored thumbnail; generates it on-the-fly if missing.
+    pub fn get_thumbnail(person_id: i64) -> Result<Option<String>, String> {
         let conn = open_conn()?;
-        let limit = limit.clamp(1, 100);
-        let total: i64 = conn
-            .query_row("SELECT COUNT(*) FROM persons", [], |row| row.get(0))
+
+        // Prefer the pre-stored thumbnail.
+        let stored: Option<Vec<u8>> = conn
+            .query_row(
+                "SELECT thumbnail FROM persons WHERE id = ?1",
+                params![person_id],
+                |row| row.get(0),
+            )
+            .optional()
             .map_err(|e| e.to_string())?;
+
+        if let Some(data) = stored {
+            return Ok(Some(general_purpose::STANDARD.encode(data)));
+        }
+
+        // Fallback: generate from the person's best face (e.g. the thumbnail
+        // was never computed during clustering, or the cover file was missing).
+        let cover_face_id: Option<i64> = conn
+            .query_row(
+                "SELECT cover_face_id FROM persons WHERE id = ?1",
+                params![person_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+            .flatten();
+
+        let generated = Self::generate_thumbnail(&conn, person_id, cover_face_id)?;
+        if let Some(data) = &generated {
+            let _ = conn.execute(
+                "UPDATE persons SET thumbnail = ?1 WHERE id = ?2",
+                params![data, person_id],
+            );
+        }
+        Ok(generated.map(|data| general_purpose::STANDARD.encode(data)))
+    }
+
+    pub fn get_page(request: &PersonPageRequest) -> Result<PersonPage, String> {
+        let conn = open_conn()?;
+        let limit = request.limit.clamp(1, 100);
+        let search = request.search.trim();
+        let search_pattern = format!(
+            "%{}%",
+            search
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_")
+        );
+        let visible_file_conditions = format!(
+            "{}{} AND {} AND {}",
+            AFile::album_filter_sql("a"),
+            AFile::inaccessible_album_filter("b"),
+            AFile::search_exclusion_condition("b"),
+            AFile::live_photo_companion_exclusion_condition(),
+        );
+        let visible_person_condition = format!(
+            "EXISTS (SELECT 1 FROM faces f JOIN afiles a ON a.id = f.file_id JOIN afolders b ON b.id = a.folder_id WHERE f.person_id = p.id{})",
+            visible_file_conditions,
+        );
+        let total: i64 = conn
+            .query_row(
+                &format!(
+                    "SELECT COUNT(*) FROM persons p WHERE (?1 = '' OR COALESCE(p.name, '') LIKE ?2 ESCAPE '\\' COLLATE NOCASE) AND {visible_person_condition}"
+                ),
+                params![search, search_pattern],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        let visible_total = if request.refresh_summary.is_some() {
+            if search.is_empty() {
+                Some(total as usize)
+            } else {
+                Some(
+                    conn.query_row(
+                        &format!("SELECT COUNT(*) FROM persons p WHERE {visible_person_condition}"),
+                        [],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .map_err(|e| e.to_string())? as usize,
+                )
+            }
+        } else {
+            None
+        };
+        let selected_person_visible = request.refresh_summary.as_ref()
+            .and_then(|summary| summary.selected_person_id)
+            .map(|person_id| {
+                conn.query_row(
+                    &format!(
+                        "SELECT EXISTS(SELECT 1 FROM persons p WHERE p.id = ?1 AND {visible_person_condition})"
+                    ),
+                    params![person_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map(|visible| visible != 0)
+                .map_err(|e| e.to_string())
+            })
+            .transpose()?;
         let name_asc = "rtrim(COALESCE(p.name, ''), '0123456789') COLLATE NOCASE ASC, CAST(substr(COALESCE(p.name, ''), length(rtrim(COALESCE(p.name, ''), '0123456789')) + 1) AS INTEGER) ASC, p.name ASC, p.id ASC";
         let name_desc = "rtrim(COALESCE(p.name, ''), '0123456789') COLLATE NOCASE DESC, CAST(substr(COALESCE(p.name, ''), length(rtrim(COALESCE(p.name, ''), '0123456789')) + 1) AS INTEGER) DESC, p.name DESC, p.id ASC";
-        let order_clause = match sort {
+        let order_clause = match request.sort {
             1 => name_desc,
             2 => "count ASC, p.name ASC, p.id ASC",
             3 => "count DESC, p.name ASC, p.id ASC",
             _ => name_asc,
         };
         let query = format!(
-            "SELECT p.id, p.name, COUNT(f.id) as count, p.thumbnail
+            "SELECT p.id, p.name, COUNT(DISTINCT a.id) as count, p.thumbnail
              FROM persons p
-             LEFT JOIN faces f ON f.person_id = p.id
+             JOIN faces f ON f.person_id = p.id
+             JOIN afiles a ON a.id = f.file_id
+             JOIN afolders b ON b.id = a.folder_id
+             WHERE (?1 = '' OR COALESCE(p.name, '') LIKE ?2 ESCAPE '\\' COLLATE NOCASE){}
              GROUP BY p.id
              ORDER BY {order_clause}
-             LIMIT ?1 OFFSET ?2"
+             LIMIT ?3 OFFSET ?4",
+            visible_file_conditions,
         );
         let mut stmt = conn.prepare(&query).map_err(|e| e.to_string())?;
         let persons_iter = stmt
-            .query_map(params![(limit + 1) as i64, offset as i64], |row| {
+            .query_map(params![search, search_pattern, (limit + 1) as i64, request.offset as i64], |row| {
                 let thumb_data: Option<Vec<u8>> = row.get(3)?;
                 Ok(Self {
                     id: row.get(0)?,
@@ -7342,6 +8592,8 @@ impl Person {
             persons,
             has_more,
             total: total as usize,
+            visible_total,
+            selected_person_visible,
         })
     }
 
@@ -7883,10 +9135,17 @@ impl Face {
     /// Returns (total_images, processed_images, unprocessed_images, total_faces)
     pub fn get_stats_full() -> Result<(usize, usize, usize, usize), String> {
         let conn = open_conn()?;
+        let visible_file_conditions = format!(
+            "{}{} AND {} AND {}",
+            AFile::album_filter_sql("a"),
+            AFile::inaccessible_album_filter("b"),
+            AFile::search_exclusion_condition("b"),
+            AFile::live_photo_companion_exclusion_condition(),
+        );
 
         let total: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM afiles WHERE file_type = 1",
+                &format!("SELECT COUNT(*) FROM afiles a JOIN afolders b ON b.id = a.folder_id WHERE a.file_type = 1{}", visible_file_conditions),
                 [],
                 |row| row.get(0),
             )
@@ -7894,14 +9153,18 @@ impl Face {
 
         let processed: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM afiles WHERE has_faces > 0 AND file_type = 1",
+                &format!("SELECT COUNT(*) FROM afiles a JOIN afolders b ON b.id = a.folder_id WHERE a.has_faces > 0 AND a.file_type = 1{}", visible_file_conditions),
                 [],
                 |row| row.get(0),
             )
             .unwrap_or(0);
 
         let faces: i64 = conn
-            .query_row("SELECT COUNT(*) FROM faces", [], |row| row.get(0))
+            .query_row(
+                &format!("SELECT COUNT(*) FROM faces f JOIN afiles a ON a.id = f.file_id JOIN afolders b ON b.id = a.folder_id WHERE {}", visible_file_conditions.trim_start_matches(" AND ")),
+                [],
+                |row| row.get(0),
+            )
             .unwrap_or(0);
 
         let unprocessed = total - processed;
@@ -7942,15 +9205,15 @@ impl ACamera {
     // get all camera makes and models from db
     pub fn get_from_db(sort: i64) -> Result<Vec<Self>, String> {
         let conn = open_conn()?;
-        let query = "SELECT UPPER(a.e_make), a.e_model, count(a.id) as count
+        let query = format!("SELECT UPPER(a.e_make), a.e_model, count(a.id) as count
             FROM afiles a
+            JOIN afolders b ON a.folder_id = b.id
             WHERE a.e_make IS NOT NULL AND a.e_model IS NOT NULL
                 AND a.id NOT IN (
                     SELECT live_photo_video_id FROM afiles WHERE live_photo_video_id IS NOT NULL
-                )
+                ){}{} AND {}
             GROUP BY UPPER(a.e_make), a.e_model
-            ORDER BY UPPER(a.e_make), a.e_model"
-            .to_string();
+            ORDER BY UPPER(a.e_make), a.e_model", AFile::inaccessible_album_filter("b"), AFile::album_filter_sql("a"), AFile::search_exclusion_condition("b"));
 
         let mut stmt = conn.prepare(query.as_str()).map_err(|e| e.to_string())?;
 
@@ -8020,15 +9283,15 @@ impl ALens {
     // get all lens makes and models from db
     pub fn get_from_db(sort: i64) -> Result<Vec<Self>, String> {
         let conn = open_conn()?;
-        let query = "SELECT UPPER(a.e_lens_make), a.e_lens_model, count(a.id) as count
+        let query = format!("SELECT UPPER(a.e_lens_make), a.e_lens_model, count(a.id) as count
             FROM afiles a
+            JOIN afolders b ON a.folder_id = b.id
             WHERE a.e_lens_make IS NOT NULL AND a.e_lens_model IS NOT NULL
                 AND a.id NOT IN (
                     SELECT live_photo_video_id FROM afiles WHERE live_photo_video_id IS NOT NULL
-                )
+                ){}{} AND {}
             GROUP BY UPPER(a.e_lens_make), a.e_lens_model
-            ORDER BY UPPER(a.e_lens_make), a.e_lens_model"
-            .to_string();
+            ORDER BY UPPER(a.e_lens_make), a.e_lens_model", AFile::inaccessible_album_filter("b"), AFile::album_filter_sql("a"), AFile::search_exclusion_condition("b"));
 
         let mut stmt = conn.prepare(query.as_str()).map_err(|e| e.to_string())?;
 
@@ -8100,15 +9363,15 @@ impl ALocation {
     pub fn get_from_db(sort: i64) -> Result<Vec<Self>, String> {
         let conn = open_conn()?;
 
-        let query = "SELECT COALESCE(a.geo_cc, ''), a.geo_admin1, a.geo_name, count(a.id) as count
+        let query = format!("SELECT COALESCE(a.geo_cc, ''), a.geo_admin1, a.geo_name, count(a.id) as count
             FROM afiles a
+            JOIN afolders b ON a.folder_id = b.id
             WHERE COALESCE(a.geo_admin1, '') <> '' AND COALESCE(a.geo_name, '') <> ''
                 AND a.id NOT IN (
                     SELECT live_photo_video_id FROM afiles WHERE live_photo_video_id IS NOT NULL
-                )
+                ){}{} AND {}
             GROUP BY a.geo_cc, a.geo_admin1, a.geo_name
-            ORDER BY a.geo_cc, a.geo_admin1, a.geo_name"
-            .to_string();
+            ORDER BY a.geo_cc, a.geo_admin1, a.geo_name", AFile::inaccessible_album_filter("b"), AFile::album_filter_sql("a"), AFile::search_exclusion_condition("b"));
 
         let mut stmt = conn.prepare(query.as_str()).map_err(|e| e.to_string())?;
 
@@ -8170,56 +9433,124 @@ impl ALocation {
     }
 }
 
-/// A grid cell of aggregated GPS density, used for heatmap rendering.
-/// `lat`/`lon` are the average coordinates of the photos within that
-/// cell (cells are ~1.1km, grouped by rounded coordinates), `count` is
-/// the number of photos within that cell.
+/// A map thumbnail cluster. `file_id` identifies a representative image for
+/// the cluster, while `count` contains every matching photo in the cell.
 #[derive(Debug, Serialize, Deserialize)]
-pub struct AGpsHeatPoint {
+pub struct AGpsMapPoint {
     pub lat: f64,
     pub lon: f64,
     pub count: i64,
+    pub file_id: i64,
 }
 
-impl AGpsHeatPoint {
-    /// Aggregate all GPS coordinates into grid cells on the backend, so the
-    /// frontend never has to handle one row per photo (important for large libraries).
-    pub fn get_heatmap_from_db() -> Result<Vec<Self>, String> {
+impl AGpsMapPoint {
+    pub fn get_map_points_from_db(params: &QueryParams) -> Result<Vec<Self>, String> {
         let conn = open_conn()?;
-
-        let mut stmt = conn
-            .prepare(
-                "SELECT AVG(gps_latitude) AS lat, AVG(gps_longitude) AS lon, COUNT(*) AS cnt
+        let (joins, where_clause, sql_params) = AFile::build_search_query_parts(params);
+        let query = format!(
+            "SELECT AVG(gps_latitude) AS lat, AVG(gps_longitude) AS lon, COUNT(*) AS cnt, MIN(id) AS file_id
+             FROM (
+                 SELECT a.id, a.gps_latitude, a.gps_longitude
                  FROM afiles a
-                 WHERE gps_latitude IS NOT NULL AND gps_longitude IS NOT NULL
-                    AND a.id NOT IN (
-                        SELECT live_photo_video_id FROM afiles WHERE live_photo_video_id IS NOT NULL
-                    )
-                 GROUP BY ROUND(gps_latitude, 2), ROUND(gps_longitude, 2)",
-            )
-            .map_err(|e| e.to_string())?;
-
+                 LEFT JOIN afolders b ON a.folder_id = b.id
+                 LEFT JOIN albums c ON b.album_id = c.id
+                 {}{} AND a.gps_latitude IS NOT NULL AND a.gps_longitude IS NOT NULL
+                 GROUP BY a.id
+             )
+             GROUP BY ROUND(gps_latitude, 2), ROUND(gps_longitude, 2)",
+            joins, where_clause,
+        );
+        let final_params: Vec<&dyn ToSql> = sql_params.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = conn.prepare(&query).map_err(|e| e.to_string())?;
         let points = stmt
-            .query_map(params![], |row| {
+            .query_map(final_params.as_slice(), |row| {
                 Ok(Self {
                     lat: row.get(0)?,
                     lon: row.get(1)?,
                     count: row.get(2)?,
+                    file_id: row.get(3)?,
                 })
             })
             .map_err(|e| e.to_string())?
             .filter_map(|r| r.ok())
             .collect();
-
         Ok(points)
     }
 }
 
 /// get connection to the db
 static CONN_POOL: Mutex<Vec<(String, Connection)>> = Mutex::new(Vec::new());
+/// Path of the library db currently known to be corrupt. Corruption state is stored per-path
+/// (not a bare bool) so `is_database_corrupted()` is always relative to the *current* library:
+/// when the current library changes (switch / remove / hide), a stale mark for another path no
+/// longer matches, so a healthy library is never falsely reported as corrupt.
+static CORRUPTED_DB_PATH: Mutex<Option<String>> = Mutex::new(None);
+
+/// Message returned when the current library is flagged corrupt. Shared so callers (e.g.
+/// switch_library) can decide from the returned error itself instead of re-reading the global flag.
+pub const DB_CORRUPTED_MSG: &str = "Database is corrupted. Please switch to another library.";
+
+/// Lock the corruption mark, recovering the guard if the mutex was poisoned. The guarded value is
+/// a plain `Option<String>` that is always safe to read, so a poison must never fail *open* into
+/// reporting a known-corrupt library as healthy.
+fn corrupted_path_guard() -> std::sync::MutexGuard<'static, Option<String>> {
+    CORRUPTED_DB_PATH
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Cheap, path-relative corruption check for the hot `open_conn` path: the caller has already
+/// resolved the current db path, so this does no config read (just a mutex + string compare).
+fn is_path_corrupted(path: &str) -> bool {
+    corrupted_path_guard().as_deref() == Some(path)
+}
+
+pub fn is_database_corrupted() -> bool {
+    match t_storage::get_current_db_path() {
+        Ok(path) => is_path_corrupted(&path),
+        Err(e) => {
+            // This bool is the sole signal behind the startup guards and the UI banner; a transient
+            // config-read failure must be diagnosable rather than silently reported as healthy.
+            eprintln!("is_database_corrupted: failed to resolve current db path: {}", e);
+            false
+        }
+    }
+}
+
+fn mark_db_corrupted(path: &str) {
+    *corrupted_path_guard() = Some(path.to_string());
+}
+
+fn clear_db_corrupted(path: &str) {
+    let mut guard = corrupted_path_guard();
+    if guard.as_deref() == Some(path) {
+        *guard = None;
+    }
+}
+
+/// Check existing data pages before migrations; never modify or rebuild the database.
+fn database_is_corrupt(path: &str) -> Result<bool, String> {
+    let check = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .and_then(|conn| {
+            conn.query_row("PRAGMA quick_check(1)", [], |row| row.get::<_, String>(0))
+        });
+    match check {
+        Ok(result) => Ok(result != "ok"),
+        Err(error) if matches!(error.sqlite_error_code(),
+            Some(rusqlite::ErrorCode::DatabaseCorrupt | rusqlite::ErrorCode::NotADatabase)
+        ) => Ok(true),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// Detect corruption errors surfaced by initialization after the integrity check.
+fn is_corruption_error(err: &str) -> bool {
+    let err = err.to_lowercase();
+    err.contains("database disk image is malformed") || err.contains("file is not a database")
+}
 
 /// A pooled connection that returns to the global pool on Drop.
-pub(crate) struct PooledConn(Option<(String, Connection)>);
+pub(crate) struct PooledConn(Option<(String, Connection)>, t_storage::DbConnectionLease);
 
 impl Drop for PooledConn {
     fn drop(&mut self) {
@@ -8274,33 +9605,57 @@ pub(crate) fn clear_conn_pool() {
 }
 
 pub(crate) fn open_conn() -> Result<PooledConn, String> {
+    let lease = t_storage::DbConnectionLease::acquire()?;
     let current_path = t_storage::get_current_db_path()
         .map_err(|e| format!("Failed to get the database file path: {}", e))?;
+    if is_path_corrupted(&current_path) {
+        return Err(DB_CORRUPTED_MSG.to_string());
+    }
     if let Ok(mut pool) = CONN_POOL.lock() {
         // Only reuse connections pointing to the same DB file
         while let Some((path, conn)) = pool.pop() {
             if path == current_path {
-                return Ok(PooledConn(Some((path, conn))));
+                return Ok(PooledConn(Some((path, conn)), lease));
             }
             // Stale connection for a different library — drop it
         }
     }
-    Ok(PooledConn(Some(create_conn()?)))
+    Ok(PooledConn(Some(create_conn()?), lease))
 }
 
 /// create all tables if not exists
 pub fn create_db() -> Result<(), String> {
-    match create_db_internal() {
-        Ok(_) => Ok(()),
-        Err(err) => {
-            if !should_recover_db(&err) {
-                return Err(err);
+    let _lease = t_storage::DbConnectionLease::acquire()?;
+    let path = t_storage::get_current_db_path()?;
+    // Re-evaluating this library: clear any stale corrupt mark for it before checking.
+    clear_db_corrupted(&path);
+    if Path::new(&path).exists() {
+        // An inconclusive pre-check (Err) must NOT abort: a read-only quick_check can fail on a
+        // perfectly healthy WAL db that needs recovery after an unclean shutdown. Fall through to
+        // create_db_internal, which opens read-write (running WAL recovery + migrations) and whose
+        // is_corruption_error fallback below still catches genuine corruption.
+        match database_is_corrupt(&path) {
+            Ok(true) => {
+                eprintln!("create_db: corruption detected for '{}'", path);
+                mark_db_corrupted(&path);
+                return Err(DB_CORRUPTED_MSG.to_string());
             }
-
-            eprintln!("create_db failed: {}. Trying recovery...", err);
-            recover_current_db_file()?;
-            create_db_internal().map_err(|e| format!("Database recovery retry failed: {}", e))
+            Ok(false) => {}
+            Err(e) => {
+                eprintln!("create_db: integrity pre-check skipped ({}); falling back to migration open", e)
+            }
         }
+    }
+    // Catch page-level corruption that surfaces while the migrations open the db read-write, so
+    // the flag is raised and the UI shows the switch-library banner instead of raw errors.
+    match create_db_internal() {
+        Ok(()) => Ok(()),
+        Err(err) if is_corruption_error(&err) => {
+            eprintln!("create_db: database corruption detected for '{}': {}", path, err);
+            mark_db_corrupted(&path);
+            Err(DB_CORRUPTED_MSG.to_string())
+        }
+        Err(err) => Err(err),
     }
 }
 
@@ -8320,6 +9675,12 @@ fn create_db_internal() -> Result<(), String> {
             description TEXT,
             indexed INTEGER DEFAULT 0,
             total INTEGER DEFAULT 0,
+            skipped_count INTEGER NOT NULL DEFAULT 0,
+            skipped_size INTEGER NOT NULL DEFAULT 0,
+            failed_count INTEGER NOT NULL DEFAULT 0,
+            failed_size INTEGER NOT NULL DEFAULT 0,
+            merged_count INTEGER NOT NULL DEFAULT 0,
+            merged_size INTEGER NOT NULL DEFAULT 0,
             last_scan_time INTEGER DEFAULT 0
         )",
         [],
@@ -8427,6 +9788,7 @@ fn create_db_internal() -> Result<(), String> {
             content_identifier TEXT,
             media_subtype TEXT,
             live_photo_video_id INTEGER,
+            motion_photo_offset INTEGER,
             FOREIGN KEY (folder_id) REFERENCES afolders(id) ON DELETE CASCADE
         )",
         [],
@@ -8455,6 +9817,15 @@ fn create_db_internal() -> Result<(), String> {
 
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_afiles_taken_date ON afiles(taken_date)",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
+    // Map viewport queries filter by both coordinates. Keep non-geotagged media
+    // out of this index so large libraries stay responsive while panning.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_afiles_gps_coordinates
+         ON afiles(gps_latitude, gps_longitude)
+         WHERE gps_latitude IS NOT NULL AND gps_longitude IS NOT NULL",
         [],
     )
     .map_err(|e| e.to_string())?;
@@ -8778,76 +10149,202 @@ fn create_db_internal() -> Result<(), String> {
     Ok(())
 }
 
-fn recover_current_db_file() -> Result<(), String> {
-    let db_path = t_storage::get_current_db_path()
-        .map_err(|e| format!("Failed to get current db path during recovery: {}", e))?;
-    let db_path = PathBuf::from(db_path);
+#[cfg(test)]
+mod tag_group_query_tests {
+    use super::*;
 
-    if !db_path.exists() {
-        // Nothing to quarantine, next create_db_internal will create a new DB.
-        return Ok(());
-    }
-
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|e| format!("Failed to get timestamp for db recovery: {}", e))?
-        .as_secs();
-
-    let db_name = db_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("library.db")
-        .to_string();
-
-    let backup_db = db_path.with_file_name(format!("{}.corrupt-{}", db_name, stamp));
-    move_or_copy(&db_path, &backup_db)?;
-
-    let wal_path = path_with_suffix(&db_path, "-wal");
-    if wal_path.exists() {
-        let backup_wal = path_with_suffix(&backup_db, "-wal");
-        let _ = move_or_copy(&wal_path, &backup_wal);
-    }
-
-    let shm_path = path_with_suffix(&db_path, "-shm");
-    if shm_path.exists() {
-        let backup_shm = path_with_suffix(&backup_db, "-shm");
-        let _ = move_or_copy(&shm_path, &backup_shm);
-    }
-
-    eprintln!(
-        "Database file quarantined for recovery: '{}' -> '{}'",
-        db_path.display(),
-        backup_db.display()
-    );
-
-    Ok(())
-}
-
-fn should_recover_db(err: &str) -> bool {
-    let err = err.to_lowercase();
-    err.contains("database disk image is malformed") || err.contains("file is not a database")
-}
-
-fn path_with_suffix(path: &Path, suffix: &str) -> PathBuf {
-    let s = format!("{}{}", path.to_string_lossy(), suffix);
-    PathBuf::from(s)
-}
-
-fn move_or_copy(src: &Path, dst: &Path) -> Result<(), String> {
-    match fs::rename(src, dst) {
-        Ok(_) => Ok(()),
-        Err(rename_err) => {
-            fs::copy(src, dst).map_err(|copy_err| {
-                format!(
-                    "Failed to move '{}' to '{}' (rename: {}, copy: {})",
-                    src.display(),
-                    dst.display(),
-                    rename_err,
-                    copy_err
-                )
-            })?;
-            fs::remove_file(src)
-                .map_err(|e| format!("Failed to remove source file '{}': {}", src.display(), e))
+    #[test]
+    fn group_filter_and_counts_deduplicate_and_honor_visibility() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE albums(id INTEGER PRIMARY KEY, path TEXT, file_types INTEGER, small_image_filter INTEGER, excluded_folders TEXT);
+            INSERT INTO albums VALUES(1, '/', 7, NULL, '[]');
+            CREATE TABLE afolders(id INTEGER PRIMARY KEY, album_id INTEGER, path TEXT, is_excluded_from_search INTEGER);
+            INSERT INTO afolders VALUES(1, 1, '/visible', 0), (2, 1, '/excluded', 1);
+            CREATE TABLE afiles(id INTEGER PRIMARY KEY, folder_id INTEGER, live_photo_video_id INTEGER, width INTEGER, height INTEGER);
+            INSERT INTO afiles VALUES(1,1,NULL,1000,1000), (2,1,NULL,100,100), (3,1,NULL,1000,1000), (4,2,NULL,1000,1000), (5,1,3,1000,1000), (6,1,NULL,1000,1000);
+            ALTER TABLE afiles ADD COLUMN file_type INTEGER DEFAULT 1;
+            CREATE TABLE atags(id INTEGER PRIMARY KEY, group_id INTEGER);
+            INSERT INTO atags VALUES(10,1), (11,1), (12,2);
+            CREATE TABLE afile_tags(file_id INTEGER, tag_id INTEGER, PRIMARY KEY(file_id,tag_id));
+            INSERT INTO afile_tags VALUES(1,10), (1,11), (2,10), (3,10), (4,10), (5,10), (6,12);").unwrap();
+        let params: QueryParams = serde_json::from_value(serde_json::json!({
+            "searchFileName":"", "searchFileType":0, "sortType":0, "sortOrder":0,
+            "searchAllSubfolders":"", "searchFolder":"", "startDate":0, "endDate":0,
+            "calendarSort":0, "make":"", "model":"", "lensMake":"", "lensModel":"",
+            "locationAdmin1":"", "locationName":"", "isFavorite":false, "rating":-1,
+            "tagId":0, "personId":0, "tagGroupId":1
+        })).unwrap();
+        for (filter, expected) in [(160, vec![1_i64, 5]), (0, vec![1_i64, 2, 5])] {
+            conn.execute("UPDATE albums SET small_image_filter=?1", params![filter]).unwrap();
+            let (joins, conditions, values) = AFile::build_search_query_parts(&params);
+            let mut stmt = conn.prepare(&format!("SELECT a.id FROM afiles a JOIN afolders b ON b.id = a.folder_id {joins} {conditions} ORDER BY a.id")).unwrap();
+            let ids: Vec<i64> = stmt.query_map(rusqlite::params_from_iter(values.iter()), |r| r.get(0)).unwrap().collect::<Result<_, _>>().unwrap();
+            assert_eq!(ids, expected);
+            let counts = ATag::get_group_counts_on(&conn).unwrap();
+            assert_eq!(counts[&1], expected.len() as i64);
+            assert_eq!(counts[&2], 1);
         }
+    }
+}
+
+#[cfg(test)]
+mod album_filter_tests {
+    use super::*;
+
+    fn fixture() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE albums(id INTEGER PRIMARY KEY, path TEXT, file_types INTEGER, small_image_filter INTEGER, excluded_folders TEXT);
+            INSERT INTO albums VALUES(1, '/photos', 7, 160, '[\"Exports\",\"100%_done\",\"客户\"]'), (2, '/other', 7, 0, '[]');
+            CREATE TABLE afolders(id INTEGER PRIMARY KEY, album_id INTEGER, path TEXT);
+            INSERT INTO afolders VALUES(1,1,'/photos'),(2,1,'/photos/Exports/nested'),(3,1,'/photos/Exports-old'),
+                (4,1,'/photos/Other/Exports'),(5,1,'/photos/100%_done'),(6,1,'/photos/100XXdone'),
+                (7,1,'/photos/客户/深层'),(8,2,'/other');
+            CREATE TABLE afiles(id INTEGER PRIMARY KEY, folder_id INTEGER, file_type INTEGER,
+                width INTEGER, height INTEGER, live_photo_video_id INTEGER, last_scan_time INTEGER DEFAULT 0, rating INTEGER DEFAULT 5);
+            INSERT INTO afiles(id,folder_id,file_type,width,height,live_photo_video_id) VALUES
+                (1,1,1,159,159,NULL),(2,1,1,160,100,NULL),(3,1,1,100,160,NULL),(4,1,1,NULL,100,NULL),
+                (5,1,1,0,100,NULL),(6,2,1,1000,1000,NULL),(7,3,1,1000,1000,NULL),(8,4,1,1000,1000,NULL),
+                (9,5,1,1000,1000,NULL),(10,6,1,1000,1000,NULL),(11,7,1,1000,1000,NULL),
+                (12,8,1,10,10,NULL),(13,1,3,1000,1000,14),(14,1,1,1000,1000,NULL),(15,1,2,1000,1000,NULL);").unwrap();
+        conn.execute_batch("ALTER TABLE albums ADD COLUMN name TEXT DEFAULT '';
+            ALTER TABLE albums ADD COLUMN description TEXT DEFAULT '';
+            ALTER TABLE albums ADD COLUMN indexed INTEGER DEFAULT 10;
+            ALTER TABLE afiles ADD COLUMN media_subtype TEXT;
+            UPDATE afiles SET media_subtype='raw_jpeg_pair' WHERE id=13;").unwrap();
+        conn
+    }
+
+    fn visible(conn: &Connection) -> Vec<i64> {
+        let query = |predicate: String| {
+            let sql = format!("SELECT a.id FROM afiles a WHERE {} AND {} ORDER BY a.id",
+                AFile::live_photo_companion_exclusion_condition(), predicate);
+            conn.prepare(&sql).unwrap().query_map([], |row| row.get(0)).unwrap()
+                .collect::<Result<Vec<i64>, _>>().unwrap()
+        };
+        let bulk = query(AFile::album_query_predicate("a"));
+        assert_eq!(bulk, query(AFile::album_filter_predicate("a")));
+        let joined_sql = format!("SELECT a.id FROM afiles a LEFT JOIN afolders b ON b.id=a.folder_id
+            LEFT JOIN albums c ON c.id=b.album_id WHERE {} AND {} ORDER BY a.id",
+            AFile::live_photo_companion_exclusion_condition(), AFile::album_joined_filter_predicate("a", "b", "c"));
+        let joined = conn.prepare(&joined_sql).unwrap().query_map([], |row| row.get::<_,i64>(0)).unwrap()
+            .collect::<Result<Vec<_>,_>>().unwrap();
+        assert_eq!(bulk, joined);
+        bulk
+    }
+
+    #[test]
+    fn lightweight_visibility_matches_album_rules_and_missing_files() {
+        let conn = fixture();
+        assert!(!AFile::is_album_visible_on(&conn, 999).unwrap());
+        assert!(!AFile::is_album_visible_on(&conn, 1).unwrap());
+        assert!(!AFile::is_album_visible_on(&conn, 6).unwrap());
+        assert!(AFile::is_album_visible_on(&conn, 2).unwrap());
+        assert!(AFile::is_album_visible_on(&conn, 12).unwrap());
+        conn.execute("UPDATE albums SET file_types=2 WHERE id=1", []).unwrap();
+        assert!(!AFile::is_album_visible_on(&conn, 2).unwrap());
+        assert!(AFile::is_album_visible_on(&conn, 15).unwrap());
+    }
+
+    #[test]
+    fn excluded_paths_match_only_the_first_relative_component() {
+        let excluded = vec!["Exports".to_string(), "客户".to_string()];
+        for path in ["/photos/Exports", "/photos/Exports/nested", "/photos/客户/子目录"] {
+            assert!(Album::path_is_excluded(Path::new("/photos"), &excluded, Path::new(path)));
+        }
+        for path in ["/photos", "/photos/Exports-old", "/photos/Other/Exports", "/other/Exports"] {
+            assert!(!Album::path_is_excluded(Path::new("/photos"), &excluded, Path::new(path)));
+        }
+    }
+
+    #[test]
+    fn album_filters_use_own_pixels_and_exact_first_level_folders() {
+        let conn = fixture();
+        // Pixel thresholds are scoped to each album.
+        assert_eq!(visible(&conn), vec![2,3,4,5,7,8,10,12,13,15]);
+        conn.execute("UPDATE albums SET small_image_filter=0 WHERE id=1", []).unwrap();
+        assert!(visible(&conn).contains(&1));
+    }
+
+    #[test]
+    fn album_filters_small_images_include_raw_but_never_hide_videos() {
+        let conn = fixture();
+        conn.execute("UPDATE afiles SET width=100,height=100 WHERE id IN (13,15)", []).unwrap();
+        let ids = visible(&conn);
+        assert!(!ids.contains(&1)); // Small regular image.
+        assert!(!ids.contains(&13)); // Small RAW image.
+        assert!(ids.contains(&15)); // Small video stays visible.
+        conn.execute("UPDATE albums SET file_types=5 WHERE id=1", []).unwrap();
+        assert!(!visible(&conn).contains(&15)); // Video type exclusion still applies.
+    }
+
+    #[test]
+    fn album_filters_keep_photos_when_paired_raw_is_excluded() {
+        let conn = fixture();
+        conn.execute("UPDATE albums SET file_types=1 WHERE id=1", []).unwrap();
+        let ids = visible(&conn);
+        assert!(ids.contains(&14));
+        assert!(!ids.contains(&13));
+        assert!(!ids.contains(&15));
+        conn.execute("UPDATE albums SET file_types=4 WHERE id=1", []).unwrap();
+        assert_eq!(visible(&conn), vec![12,13]);
+        conn.execute("UPDATE albums SET file_types=2 WHERE id=1", []).unwrap();
+        assert_eq!(visible(&conn), vec![12,15]);
+    }
+
+    #[test]
+    fn album_filters_sweep_preserves_all_excluded_metadata() {
+        let conn = fixture();
+        conn.execute("UPDATE albums SET file_types=1 WHERE id=1", []).unwrap();
+        conn.execute(&format!("DELETE FROM afiles AS a WHERE last_scan_time < 1 AND {}",
+            AFile::album_scan_predicate("a")), []).unwrap();
+        let retained: Vec<(i64,i64)> = conn.prepare("SELECT id,rating FROM afiles ORDER BY id").unwrap()
+            .query_map([], |row| Ok((row.get(0)?,row.get(1)?))).unwrap().collect::<Result<_,_>>().unwrap();
+        assert_eq!(retained, vec![(1,5),(6,5),(9,5),(11,5),(13,5),(15,5)]);
+        conn.execute("UPDATE albums SET file_types=7,excluded_folders='[]',small_image_filter=0", []).unwrap();
+        assert_eq!(visible(&conn), vec![1,6,9,11,13,15]);
+    }
+
+    #[test]
+    fn album_filters_save_is_atomic_and_preserves_ratings_on_reinclusion() {
+        let mut conn = fixture();
+        Album::edit_on(&mut conn,1,"Album","Description",1,320,&["Exports".into()]).unwrap();
+        assert_eq!(conn.query_row("SELECT indexed FROM albums WHERE id=1", [], |row| row.get::<_,i64>(0)).unwrap(),0);
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM afiles", [], |row| row.get::<_,i64>(0)).unwrap(),15);
+        assert!(conn.query_row("SELECT live_photo_video_id FROM afiles WHERE id=13", [], |row| row.get::<_,Option<i64>>(0)).unwrap().is_none());
+        Album::edit_on(&mut conn,1,"Album","Description",7,0,&[]).unwrap();
+        assert_eq!(conn.query_row("SELECT rating FROM afiles WHERE id=13", [], |row| row.get::<_,i64>(0)).unwrap(),5);
+        assert!(visible(&conn).contains(&13));
+    }
+
+    #[test]
+    fn album_filters_reject_invalid_scope_without_touching_database() {
+        assert!(Album::edit(1,"name","",0,0,&[]).is_err());
+        assert!(Album::edit(1,"name","",8,0,&[]).is_err());
+        assert!(Album::edit(1,"name","",7,200,&[]).is_err());
+        for path in ["", ".", "..", "../sibling", "parent/child", "parent\\child", "/absolute"] {
+            assert!(Album::edit(1,"name","",7,0,&[path.into()]).is_err());
+        }
+    }
+}
+
+#[cfg(test)]
+mod raw_display_cache_tests {
+    use super::*;
+    use crate::t_raw_display::RawPreviewMode;
+
+    #[test]
+    fn raw_display_cache_separates_modes_and_normalizes_missing_orientation() {
+        let key = |mode, orientation| AThumb::build_thumb_key(
+            "raw-display-test", 42, 512, Some(123), orientation,
+            Some(RawDisplayOptions { mode, prefer_pair: false, auto_bright: false }),
+        );
+        for mode in [RawPreviewMode::Embedded, RawPreviewMode::Rendered] {
+            let bright_key = AThumb::build_thumb_key("raw-display-test", 42, 512, Some(123), 1,
+                Some(RawDisplayOptions { mode, prefer_pair: false, auto_bright: true }));
+            assert_ne!(key(mode, 1), bright_key);
+        }
+        assert_ne!(key(RawPreviewMode::Embedded, 1), key(RawPreviewMode::Rendered, 1));
+        assert_eq!(key(RawPreviewMode::Embedded, 0), key(RawPreviewMode::Embedded, 1));
+        assert_ne!(key(RawPreviewMode::Embedded, 6), key(RawPreviewMode::Embedded, 1));
     }
 }

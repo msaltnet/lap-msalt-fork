@@ -13,7 +13,7 @@ import {
   IconRotate,
   IconCopy,
   IconRename,
-  IconMove,
+  IconFileArrowRight,
   IconTrash,
   IconComment,
   IconPhotoSearch,
@@ -24,26 +24,17 @@ import {
   IconFlag,
   IconFlagFilled,
   IconFlagOff,
-  IconBookmarkOff,
   IconBookmark,
   IconSplitOn,
   IconSplitOn4,
   IconSparkles,
 } from '@/common/icons';
 
-// Label lookup table for "open in external app" command based on media type
-// and item count.
 const OPEN_IN_APP_LABELS = {
-  image: {
-    one: ['open_image_in_app', 'Open image in {app}...'],
-    many: ['open_selected_images_in_app', 'Open selected images in {app}...'],
-  },
-  video: {
-    one: ['open_video_in_app', 'Open video in {app}...'],
-    many: ['open_selected_videos_in_app', 'Open selected videos in {app}...'],
-  },
   generic: ['open_in_app', 'Open in external app...'],
 } as const;
+
+type ExternalAppKind = 'image' | 'video';
 
 export const useFileMenuItems = (
   file: Ref<any>,
@@ -52,7 +43,6 @@ export const useFileMenuItems = (
   translate: (key: string) => string,
   onAction: (action: string) => void,
   options?: {
-    isCollectionView?: Ref<boolean>;
     selectMode?: Ref<boolean>;
     selectionMediaKind?: Ref<'image' | 'video' | 'mixed' | 'empty'>;
     selectionCount?: Ref<number>;
@@ -66,32 +56,31 @@ export const useFileMenuItems = (
   const menuLabel = ([key, fallback]: readonly [string, string]) =>
     String(localeMsg.value.menu.file[key] || fallback);
 
-  // Constructs a label for the "open in external app" entry, depending on media type
-  // and item count. Multi-select always uses the selected-items wording, including
-  // when only one item is selected.
-  const openInAppLabel = (
-    kind: 'image' | 'video' | 'mixed' | 'empty',
-    count = 1,
-    isMultiSelect = false,
-  ) => {
-    if (kind !== 'image' && kind !== 'video') return menuLabel(OPEN_IN_APP_LABELS.generic);
-    const name = String(
-      (kind === 'video' ? config.settings.externalVideoAppName : config.settings.externalImageAppName) || '',
-    );
-    if (!name) return menuLabel(OPEN_IN_APP_LABELS.generic);
-    const variant = OPEN_IN_APP_LABELS[kind][isMultiSelect || count > 1 ? 'many' : 'one'];
-    return menuLabel(variant).replace('{app}', name);
+  const externalAppMenu = (kind?: ExternalAppKind) => {
+    const apps = kind ? config.externalAppsFor(kind) : [];
+    const defaultApp = kind ? config.defaultExternalApp(kind) : null;
+    return {
+      label: menuLabel(OPEN_IN_APP_LABELS.generic),
+      icon: markRaw(IconExternal),
+      children: [
+        ...apps.map((app: any) => ({
+          label: app.name || app.path,
+          shortcut: app.id === defaultApp?.id ? shortcut('file.openExternalApp') : undefined,
+          action: createAction(`open-external-app:${app.id}`),
+        })),
+        ...(apps.length ? [{ label: '-', action: null }] : []),
+        {
+          label: String(localeMsg.value.menu.file.manage_app || 'Manage app...'),
+          action: createAction('manage-external-apps'),
+        },
+      ],
+    };
   };
 
   // Creates a context menu for multi-select mode.
   const buildSelectionMenu = () => {
     const kind = options?.selectionMediaKind?.value ?? 'empty';
-    const selectionIsVideo = kind === 'video';
-    const selectionIsMixed = kind === 'mixed';
-    // Gate on the app *path* (what actually launches), not the display name.
-    const appPath = String(
-      (selectionIsVideo ? config.settings.externalVideoAppPath : config.settings.externalImageAppPath) || '',
-    );
+    const externalAppKind = kind === 'image' || kind === 'video' ? kind : undefined;
     const selectionCount = options?.selectionCount?.value ?? 0;
     return [
       {
@@ -100,6 +89,9 @@ export const useFileMenuItems = (
         disabled: kind !== 'image' || selectionCount < 2,
         action: createAction('compare-selected-images'),
       },
+      // A mixed image+video selection has no single external-app target, so
+      // disable the entry rather than showing an empty app list.
+      { ...externalAppMenu(externalAppKind), disabled: kind === 'mixed' },
       {
         label: String(localeMsg.value.menu.file.generate_ai_captions || 'Generate AI captions'),
         icon: markRaw(IconSparkles),
@@ -108,11 +100,10 @@ export const useFileMenuItems = (
         action: createAction('generate-ai-captions'),
       },
       {
-        label: openInAppLabel(kind, selectionCount, true),
-        icon: markRaw(IconExternal),
-        disabled: kind === 'empty' || selectionIsMixed || !appPath,
-        shortcut: shortcut('file.openExternalApp'),
-        action: createAction('open-external-app'),
+        label: localeMsg.value.menu.file.refresh_file_info,
+        icon: markRaw(IconRefresh),
+        disabled: selectionCount === 0,
+        action: createAction('refresh-file-info'),
       },
     ];
   };
@@ -121,8 +112,15 @@ export const useFileMenuItems = (
   const buildSingleFileMenu = (f: any) => {
     const isImage = f.file_type === 1 || f.file_type === 3;
     const isVideo = f.file_type === 2;
-    const imageAppPath = String(config.settings.externalImageAppPath || '');
-    const videoAppPath = String(config.settings.externalVideoAppPath || '');
+    // Grouped/query rows can omit album_id; the active album is still the
+    // correct target, matching the action handler in Content.vue.
+    const albumId = Number(libConfig.album.id || f.album_id);
+    const canSetAlbumCover = config.main.sidebarIndex === SIDEBAR.ALBUM
+      && libConfig.activePane !== 'collection'
+      && isImage
+      && albumId > 0;
+    const canSetDesktopWallpaper = f.file_type === 1
+      || (f.file_type === 3 && f.media_subtype === 'raw_jpeg_pair' && f.live_photo_video_path);
     return [
       {
         label: localeMsg.value.menu.file.view_in_new_window,
@@ -130,14 +128,7 @@ export const useFileMenuItems = (
         shortcut: shortcut('file.openNewWindow'),
         action: createAction('open')
       },
-      {
-        label: openInAppLabel(isVideo ? 'video' : 'image'),
-        hidden: !isImage && !isVideo,
-        disabled: !((isImage && imageAppPath) || (isVideo && videoAppPath)),
-        icon: markRaw(IconExternal),
-        shortcut: shortcut('file.openExternalApp'),
-        action: createAction('open-external-app')
-      },
+      { ...externalAppMenu(isVideo ? 'video' : 'image'), hidden: !isImage && !isVideo },
       {
         label: localeMsg.value.menu.file.edit_image,
         icon: markRaw(IconImageEdit),
@@ -283,7 +274,7 @@ export const useFileMenuItems = (
         children: [
           {
             label: translate('menu.file.move_within_library'),
-            icon: markRaw(IconMove),
+            icon: markRaw(IconFileArrowRight),
             shortcut: shortcut('file.moveTo'),
             action: createAction('move-within-library')
           },
@@ -325,18 +316,27 @@ export const useFileMenuItems = (
         action: createAction('refresh-file-info')
       },
       {
-        label: localeMsg.value.menu.file.set_album_cover,
-        hidden: config.main.sidebarIndex !== SIDEBAR.ALBUM || libConfig.activePane === 'collection' || !isImage || !Number(f.album_id),
-        action: createAction('set-album-cover')
+        label: localeMsg.value.menu.file.set_as,
+        hidden: !canSetAlbumCover && !canSetDesktopWallpaper,
+        children: [
+          {
+            label: localeMsg.value.menu.file.set_album_cover,
+            hidden: !canSetAlbumCover,
+            action: createAction('set-album-cover'),
+          },
+          {
+            label: localeMsg.value.menu.file.set_desktop_wallpaper,
+            hidden: !canSetDesktopWallpaper,
+            action: createAction('set-desktop-wallpaper'),
+          },
+        ],
       },
       { label: "-", action: null },
       {
-        label: options?.isCollectionView?.value
-          ? translate('menu.file.remove_from_collection')
-          : localeMsg.value.menu.file.move_to_trash,
-        icon: markRaw(options?.isCollectionView?.value ? IconBookmarkOff : IconTrash),
+        label: localeMsg.value.menu.file.delete,
+        icon: markRaw(IconTrash),
         shortcut: shortcut('file.trash'),
-        action: createAction(options?.isCollectionView?.value ? 'remove-from-collection' : 'trash')
+        action: createAction('trash')
       },
     ];
   };

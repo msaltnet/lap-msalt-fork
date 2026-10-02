@@ -18,7 +18,7 @@ brew install --cask lap
 ### Linux (Ubuntu/Debian/Linux Mint, amd64 / arm64)
 
 1. Download the latest `_amd64.deb` or `_arm64.deb` package from the [Releases page](https://github.com/julyx10/lap/releases).
-2. Install it with your package manager or run `sudo apt install ./lap_<version>_amd64.deb` or `sudo apt install ./lap_<version>_arm64.deb`.
+2. Install it with your package manager or run `sudo apt install ./Lap_0.3.2_amd64.deb` (x64) or `sudo apt install ./Lap_0.3.2_arm64.deb` (ARM64).
 3. Launch **Lap** from your applications menu.
 
 For better video playback support on Ubuntu/Debian/Linux Mint, install:
@@ -26,6 +26,14 @@ For better video playback support on Ubuntu/Debian/Linux Mint, install:
 ```bash
 sudo apt install gstreamer1.0-libav gstreamer1.0-plugins-good
 ```
+
+### Linux AppImage (x64 / ARM64)
+
+1. Download the `_amd64.AppImage` (x64) or `_aarch64.AppImage` (ARM64) file from the [latest release](https://github.com/julyx10/lap/releases/latest).
+2. Make it executable in your file manager, or run `chmod +x Lap_0.3.2_amd64.AppImage` using the filename you downloaded.
+3. Double-click the AppImage to launch Lap.
+
+The AppImage uses system multimedia libraries for video playback. On Ubuntu/Debian/Linux Mint, install the GStreamer packages listed above.
 
 ### Windows 10/11 (x64 / ARM64)
 
@@ -40,9 +48,19 @@ Lap's Windows installer is currently unsigned. If Microsoft SmartScreen blocks t
 When you open Lap for the first time:
 
 1.  **Grant Permissions**: Lap needs access to your folders to display photos.
-2.  **Add a Library**: Point Lap to a folder containing your photos.
+2.  **Add an Album**: Add a folder containing your photos to your library.
 3.  **Let it Index**: Lap will scan your files, generate thumbnails, and build local search data. This happens on your device.
 
-## Upgrading from v0.1.x
+## Import and Explore
 
-You can install Lap v0.2.x directly over a v0.1.x installation. The local database is migrated automatically on first launch.
+- Use **Import…** from an album's context menu to copy media into date-organized folders while preserving filenames and skipping duplicate content.
+- Switch to **Map View** from the main toolbar to explore geotagged media matching your current filters. Map tiles require an internet connection.
+- Adjust thumbnail quality and the RAW thumbnail source in **Settings → Advanced**.
+
+## Updating Lap
+
+On macOS and Windows, use the built-in updater or install the latest package over your existing installation. For Linux DEB installations, install the latest matching DEB package with your package manager.
+
+For AppImage installations, download the new AppImage instead of using the built-in updater. Version 0.3.2 includes embedded update information and companion `.zsync` files for future delta updates through compatible external tools such as AppImageUpdate.
+
+See the [v0.3.2 release notes](/guide/release-notes/v0.3.2) for the latest changes.

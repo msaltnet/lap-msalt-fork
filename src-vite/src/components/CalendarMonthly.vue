@@ -20,11 +20,12 @@
         class="size-7 text-xs flex items-center justify-center rounded-box"
         :class="{
           'bg-base-content/5 cursor-default scale-80': sumMonthCount(m) === 0,
-          'text-base-content/70 hover:text-base-content cursor-pointer': sumMonthCount(m) > 0,
-          'bg-base-content/20': sumMonthCount(m) > 0 && sumMonthCount(m) < 100,
-          'bg-base-content/50': sumMonthCount(m) >= 100 && sumMonthCount(m) < 1000,
-          'bg-base-content/80': sumMonthCount(m) >= 1000,
-          'bg-primary/70 text-primary-content/70 hover:text-primary-content/70 selected-item': isSelected(year, m),
+          'text-base-100/70 hover:text-base-100 hover:bg-base-content/80 hover:scale-110 transition-all cursor-pointer': sumMonthCount(m) > 0,
+          'bg-base-content/30': heatLevel(sumMonthCount(m)) === 1,
+          'bg-base-content/40': heatLevel(sumMonthCount(m)) === 2,
+          'bg-base-content/50': heatLevel(sumMonthCount(m)) === 3,
+          'bg-base-content/60': heatLevel(sumMonthCount(m)) === 4 && !isSelected(year, m),
+          'text-base-100! bg-primary hover:bg-primary scale-110': isSelected(year, m),
           'border border-base-content/20': isThisMonth(year, m),
         }"
         @click="sumMonthCount(m) > 0 ? clickDate(year, m) : null" 
@@ -39,7 +40,7 @@
 
 <script setup lang="ts">
 
-import { computed } from 'vue';
+import { computed, PropType } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { libConfig } from '@/common/config';
 import { formatDate } from '@/common/utils';
@@ -52,6 +53,10 @@ const props = defineProps({
   months: {
     type: Object,
     required: true,
+  },
+  heatmapThresholds: {
+    type: Array as PropType<number[] | null>,
+    default: null,
   }
 });
 
@@ -71,6 +76,22 @@ function sumMonthCount(month: number) {
     });
   }
   return sum;
+}
+
+function heatLevel(count: number) {
+  if (count === 0) return 0;
+
+  const thresholds = props.heatmapThresholds;
+  if (thresholds) {
+    if (count < thresholds[0]) return 1;
+    if (count < thresholds[1]) return 2;
+    if (count < thresholds[2]) return 3;
+    return 4;
+  }
+
+  if (count < 100) return 1;
+  if (count < 1000) return 2;
+  return 4;
 }
 
 // Check if the given month is this month

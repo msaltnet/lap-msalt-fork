@@ -3,19 +3,19 @@
     :title="$t('msgbox.manage_libraries.title')" 
     :width="600"
     :height="400"
+    position-key="manage-libraries"
     @cancel="clickCancel"
   >
     <div class="flex flex-col flex-1 min-h-0 border border-base-content/5 bg-base-300/30 shadow-sm rounded-box overflow-hidden relative">
-      <div class="flex items-center px-3 py-2 shrink-0 select-none">
+      <div class="flex items-center px-2 py-2 shrink-0 select-none">
         <span class="flex-1 sidebar-panel-header-title text-base-content/30">{{ $t('msgbox.manage_libraries.libraries') }} ({{ libraries.length }})</span>
-        <PanelActionButton
+        <TButton
           :icon="IconAdd"
-          primary
+          :buttonSize="'small'"
+          :tooltip="$t('msgbox.manage_libraries.add_new')"
           :disabled="isMaxLibraryReached || showAddInput || isRenaming || isAddingLibrary"
           @click="startAddLibrary"
-        >
-          {{ $t('msgbox.manage_libraries.add_new') }}
-        </PanelActionButton>
+        />
       </div>
 
       <div class="flex-1 min-h-0 overflow-x-hidden overflow-y-auto select-none">
@@ -24,13 +24,14 @@
           class="p-1"
           :animation="200"
           handle=".drag-handle"
-          :disabled="showAddInput || isRenaming"
+          :disabled="showAddInput || isRenaming || reorderingLibraryId === null"
           @end="onDragEnd"
         >
         <div 
           v-for="lib in libraries" 
           :key="lib.id"
           :ref="(el) => setLibraryItemRef(el, lib.id)"
+          :data-reordering-library="reorderingLibraryId === lib.id ? 'true' : undefined"
           class="flex items-center px-1 h-12 rounded-box group transition-all duration-200 ease-in-out"
           :class="[
             selectedLibraryId === lib.id
@@ -40,15 +41,19 @@
           ]"
           @click="selectLibrary(lib)"
         >
+          <!-- Reorder handle: space always reserved (w-5) to avoid layout shift;
+               icon + .drag-handle class only present for the row in reorder mode.
+               w-5 (20px) with a 16px icon leaves 4px on the right, which plus
+               the name container's p-1 (4px) yields an 8px gap to IconPhotoAll. -->
           <div
-            class="drag-handle invisible shrink-0 cursor-move"
+            class="w-4 shrink-0 flex items-center"
             :class="[
-              { 'visible!': selectedLibraryId === lib.id },
-              { 'cursor-not-allowed opacity-30': showAddInput || isRenaming },
+              reorderingLibraryId === lib.id ? 'drag-handle cursor-move' : '',
+              reorderingLibraryId === lib.id && (showAddInput || isRenaming) ? 'cursor-not-allowed opacity-30' : '',
             ]"
-            :title="$t('msgbox.manage_libraries.reorder')"
+            :title="reorderingLibraryId === lib.id ? $t('msgbox.manage_libraries.reorder') : undefined"
           >
-            <IconDragHandle class="w-4 h-4 text-base-content/70 hover:text-base-content" />
+            <IconDragHandle v-if="reorderingLibraryId === lib.id" class="w-4 h-4 text-base-content/70 hover:text-base-content" />
           </div>
 
           <!-- Name & Info -->
@@ -85,47 +90,37 @@
             </div>
           </div>
 
-          <div
-            class="w-40 shrink-0 text-right text-xs text-base-content/30 truncate group-hover:hidden"
-            :class="{ hidden: selectedLibraryId === lib.id }"
-          >
-            <span v-if="libraryStats[lib.id]">
-              {{ $t('statusbar.files_summary', { count: libraryStats[lib.id].fileCount.toLocaleString(), size: formatFileSize(libraryStats[lib.id].totalSize) }) }}
-            </span>
-            <span v-else-if="libraryStatsLoading[lib.id]">
-              {{ $t('msgbox.manage_libraries.calculating_stats') }}
-            </span>
-            <span v-else-if="libraryStatsError[lib.id]">
-              {{ $t('msgbox.manage_libraries.unable_to_load') }}
-            </span>
-          </div>
-
-          <!-- Actions -->
-          <div
-            class="hidden w-40 shrink-0 justify-end text-base-content/70 group-hover:flex!"
-            :class="{ 'flex!': selectedLibraryId === lib.id }"
-          >
-            <TButton
-              :icon="IconEdit"
-              :buttonSize="'small'"
-              :disabled="showAddInput || isRenaming"
-              :tooltip="$t('msgbox.manage_libraries.rename')"
-              @click.stop="startRename(lib)"
-            />
-            <TButton
-              :icon="lib.hidden ? IconHide : IconUnhide"
-              :buttonSize="'small'"
-              :disabled="lib.id === 'default' || showAddInput || isRenaming"
-              :tooltip="lib.hidden ? $t('msgbox.manage_libraries.show') : $t('msgbox.manage_libraries.hide')"
-              @click.stop="toggleVisibility(lib)"
-            />
-            <TButton
-              :icon="IconTrash"
-              :buttonSize="'small'"
-              :disabled="lib.id === 'default' || showAddInput || isRenaming"
-              :tooltip="$t('msgbox.manage_libraries.delete')"
-              @click.stop="confirmDelete(lib)"
-            />
+          <!-- Right side: stats (always visible) + context menu (on hover/select) -->
+          <div class="ml-auto flex flex-row items-center gap-1 shrink-0 text-base-content/30">
+            <div class="text-right text-xs flex flex-col justify-center gap-0.5 max-w-48">
+              <template v-if="libraryStats[lib.id]">
+                <span class="truncate leading-4">
+                  {{ $t('statusbar.files_summary', { count: libraryStats[lib.id].fileCount.toLocaleString(), size: formatFileSize(libraryStats[lib.id].totalSize) }) }}
+                </span>
+                <span v-if="libraryStats[lib.id].thumbCacheSize > 0" class="truncate leading-4">
+                  {{ $t('msgbox.manage_libraries.cache_size', { size: formatFileSize(libraryStats[lib.id].thumbCacheSize) }) }}
+                </span>
+              </template>
+              <span v-else-if="libraryStatsLoading[lib.id]" class="truncate leading-4">
+                {{ $t('msgbox.manage_libraries.calculating_stats') }}
+              </span>
+              <span v-else-if="libraryStatsError[lib.id]" class="truncate leading-4">
+                {{ $t('msgbox.manage_libraries.unable_to_load') }}
+              </span>
+            </div>
+            <div
+              :class="selectedLibraryId === lib.id
+                ? 'w-6 shrink-0 opacity-100'
+                : 'w-6 shrink-0 opacity-0 translate-x-2 transition-all duration-200 delay-200 group-hover:opacity-100 group-hover:translate-x-0'"
+              @click.stop
+            >
+              <ContextMenu
+                :iconMenu="IconMore"
+                :menuItems="libraryMenuItems(lib)"
+                :smallIcon="true"
+                :disabled="showAddInput || isRenaming"
+              />
+            </div>
           </div>
           </div>
         </VueDraggable>
@@ -181,6 +176,7 @@ import { VueDraggable } from 'vue-draggable-plus';
 
 import { useI18n } from 'vue-i18n';
 import { useUIStore } from '@/stores/uiStore';
+import { useToast } from '@/common/toast';
 import { config } from '@/common/config';
 import { 
   getAppConfig, 
@@ -191,12 +187,13 @@ import {
   reorderLibraries, 
   getLibraryInfo,
   switchLibrary,
+  cleanUnusedThumbnailCache,
 } from '@/common/api';
 import { isValidFileName, formatFileSize } from '@/common/utils';
 import ModalDialog from '@/components/ModalDialog.vue';
 import TButton from '@/components/TButton.vue';
-import PanelActionButton from '@/components/PanelActionButton.vue';
 import MessageBox from '@/components/MessageBox.vue';
+import ContextMenu from '@/components/ContextMenu.vue';
 import {
   IconDragHandle,
   IconEdit,
@@ -205,6 +202,9 @@ import {
   IconUnhide,
   IconAdd,
   IconPhotoAll,
+  IconBolt,
+  IconMore,
+  IconOrder,
 } from '@/common/icons';
 
 const props = defineProps({
@@ -213,6 +213,7 @@ const props = defineProps({
 
 const emit = defineEmits(['ok', 'cancel', 'updated']);
 const uiStore = useUIStore();
+const toast = useToast();
 const { t, locale, messages } = useI18n();
 const localeMsg = computed(() => messages.value[locale.value] as any);
 
@@ -227,6 +228,14 @@ const libraryStats = ref<Record<string, any>>({});
 const libraryStatsLoading = ref<Record<string, boolean>>({});
 const libraryStatsError = ref<Record<string, boolean>>({});
 const isAddingLibrary = ref(false);
+// Per-library "clean thumbnail cache" in-flight flag so the row button can
+// show a spinner and further clicks on the same row are ignored.
+const cleaningCacheIds = ref<Record<string, boolean>>({});
+// Which library is currently in "reorder mode" (drag handle visible, drag
+// enabled). Null means no row is draggable. Mirrors CollectionTray's
+// reorderingCollectionId pattern: click Reorder in the context menu to arm
+// one specific row, click anywhere outside that row to disarm.
+const reorderingLibraryId = ref<string | null>(null);
 const selectedLibraryId = ref('');
 let statsLoadToken = 0;
 
@@ -307,9 +316,18 @@ const onKeyDown = (e: KeyboardEvent) => {
   }
 };
 
+// Exit reorder mode when the user clicks anywhere outside the armed row.
+// Mirrors CollectionTray.handleReorderOutsidePointerDown.
+const handleReorderOutsidePointerDown = (event: PointerEvent) => {
+  if (event.button !== 0 || reorderingLibraryId.value === null) return;
+  if (event.target instanceof Element && event.target.closest('[data-reordering-library="true"]')) return;
+  reorderingLibraryId.value = null;
+};
+
 onMounted(async () => {
   uiStore.pushInputHandler('ManageLibraries');
   window.addEventListener('keydown', onKeyDown);
+  document.addEventListener('pointerdown', handleReorderOutsidePointerDown, true);
   await loadLibraries();
   
   // If invoked as "New Library", show add input immediately
@@ -321,6 +339,7 @@ onMounted(async () => {
 onUnmounted(() => {
   uiStore.removeInputHandler('ManageLibraries');
   window.removeEventListener('keydown', onKeyDown);
+  document.removeEventListener('pointerdown', handleReorderOutsidePointerDown, true);
 });
 
 const loadLibraries = async () => {
@@ -331,6 +350,10 @@ const loadLibraries = async () => {
   currentLibraryId.value = appConfig.current_library_id;
   if (!selectedLibraryId.value || !libraries.value.some(lib => lib.id === selectedLibraryId.value)) {
     selectedLibraryId.value = currentLibraryId.value;
+  }
+  // Disarm reorder mode if the armed library no longer exists (e.g. after delete).
+  if (reorderingLibraryId.value !== null && !libraries.value.some(lib => lib.id === reorderingLibraryId.value)) {
+    reorderingLibraryId.value = null;
   }
   syncLibraryStatsState();
 
@@ -562,8 +585,79 @@ const clickOk = async () => {
   emit('cancel');
 };
 
+// Clean unreferenced thumbnail cache for a specific library. Works for any
+// library (not just the current one) — the backend opens that library's DB
+// transiently to read its athumbs table.
+const cleanLibraryCache = async (lib: any) => {
+  if (!lib?.id || cleaningCacheIds.value[lib.id]) return;
+  cleaningCacheIds.value = { ...cleaningCacheIds.value, [lib.id]: true };
+  try {
+    const result = await cleanUnusedThumbnailCache(lib.id);
+    toast.success(t('msgbox.manage_libraries.cache_cleaned', {
+      count: result?.filesRemoved ?? 0,
+      size: formatFileSize(result?.bytesFreed ?? 0),
+    }));
+    // Refresh this row's stats so the cache size updates in place.
+    const info = await getLibraryInfo(lib.id);
+    if (info) {
+      libraryStats.value = { ...libraryStats.value, [lib.id]: info };
+    }
+  } catch (error: any) {
+    toast.error(error?.message || String(error));
+  } finally {
+    const next = { ...cleaningCacheIds.value };
+    delete next[lib.id];
+    cleaningCacheIds.value = next;
+  }
+};
+
 const clickCancel = () => {
   emit('cancel');
+};
+
+// Context menu items for a library row. Mirrors the CollectionTray / Tag
+// panel pattern: rename + maintenance actions on top, destructive at bottom
+// behind a separator. `disabled` per-item handles the "default" library
+// (cannot hide/remove) and the in-flight cache clean case.
+const libraryMenuItems = (lib: any) => {
+  const isDefault = lib.id === 'default';
+  const isCleaning = !!cleaningCacheIds.value[lib.id];
+  return [
+    {
+      label: t('msgbox.manage_libraries.rename'),
+      icon: IconEdit,
+      action: () => startRename(lib),
+    },
+    {
+      label: t('msgbox.manage_libraries.reorder'),
+      icon: IconOrder,
+      // Toggle: clicking Reorder on the already-armed row disarms it.
+      action: () => {
+        reorderingLibraryId.value = reorderingLibraryId.value === lib.id ? null : lib.id;
+      },
+    },
+    {
+      label: t('msgbox.manage_libraries.clean_cache'),
+      icon: IconBolt,
+      disabled: isCleaning,
+      action: () => cleanLibraryCache(lib),
+    },
+    {
+      label: lib.hidden
+        ? t('msgbox.manage_libraries.show')
+        : t('msgbox.manage_libraries.hide'),
+      icon: lib.hidden ? IconUnhide : IconHide,
+      disabled: isDefault,
+      action: () => toggleVisibility(lib),
+    },
+    { label: '-', action: null },
+    {
+      label: t('msgbox.manage_libraries.remove'),
+      icon: IconTrash,
+      disabled: isDefault,
+      action: () => confirmDelete(lib),
+    },
+  ];
 };
 
 // --- Drag and Drop ---

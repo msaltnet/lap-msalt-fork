@@ -9,14 +9,10 @@
   </p>
 </div>
 
-[English](../README.md) | [Deutsch](README.de.md) | [Français](README.fr.md) | [Español](README.es.md) | [Português](README.pt.md) | [Русский](README.ru.md) | [简体中文](README.zh-CN.md) | 日本語 | [한국어](README.ko.md)
+[English](../README.md) | [Deutsch](README.de.md) | [Español](README.es.md) | [Français](README.fr.md) | [Italiano](README.it.md) | [Magyar](README.hu.md) | [Nederlands](README.nl.md) | [Polski](README.pl.md) | [Português](README.pt.md) | [Русский](README.ru.md) | [Українська](README.uk.md) | [中文简体](README.zh-CN.md) | [中文繁體](README.zh-TW.md) | 日本語 | [한국어](README.ko.md)
 
 Lapは、オープンソースでローカルファーストな写真管理ツールです。家族のアルバムを閲覧したり、古い写真を素早く見つけたり、膨大な個人メディアライブラリをオフラインで管理したりするために設計されています。
 クラウド写真サービスのプライバシーに配慮した代替案として、強制アップロードなし、ローカルAI検索、フォルダーファーストのワークフローを提供し、完全に無料で使用できます。
-
-- ウェブサイト: [https://julyx10.github.io/lap/](https://julyx10.github.io/lap/)
-- デモビデオ: [https://youtu.be/RbKqNKhbVUs](https://youtu.be/RbKqNKhbVUs)
-- プライバシーポリシー: [PRIVACY.md](../PRIVACY.md)
 
 ## Lapをダウンロード
 
@@ -26,7 +22,8 @@ Lapは、オープンソースでローカルファーストな写真管理ツ�
 | :-- | :-- | :-- |
 | **macOS (Apple Silicon / Intel)** | `_aarch64.dmg` / `_x64.dmg` | Appleによる公証済み |
 | **Windows 10/11 (x64 / ARM64)** | `_x64_en-US.msi` / `_arm64_en-US.msi` | 未署名 — SmartScreenがダウンロードをブロックした場合は、**維持する**をクリックしてください |
-| **Linux (amd64 / arm64)** | `_amd64.deb` / `_arm64.deb` | Debian系ディストリビューション向け（Ubuntu、Debian、Linux Mintなど） |
+| **Linux (x64 / ARM64)** | `_amd64.deb` / `_arm64.deb` | Debian系ディストリビューション向け（Ubuntu、Debian、Linux Mintなど） |
+| **Linux (x64 / ARM64)** | `_amd64.AppImage` / `_aarch64.AppImage` | 実行権限を付与し、ダブルクリックで起動 |
 
 ### macOS with Homebrew
 
@@ -38,7 +35,8 @@ brew install --cask lap
 ## スクリーンショット
 
 <p align="center">
-  <img src="../docs/public/screenshots/Lap_0.3.0_main_1.png" alt="Lap ローカルフォトライブラリ管理 スクリーンショット" width="900">
+  <img src="../docs/public/screenshots/lap_library.png" alt="Lap のローカルフォトライブラリ管理" width="900">
+  <img src="../docs/public/screenshots/lap_map_view.png" alt="Lap のマップビュー" width="900">
 </p>
 
 ## Lapを選ぶ理由
@@ -51,17 +49,22 @@ brew install --cask lap
 
 ## 主な機能
 
-- **柔軟なライブラリ閲覧**: タイムライン、フォルダー、場所、カメラ、レンズ、タグ、お気に入り、評価、被写体、顔で絞り込めます。
-- **スマートアルバム**: ルールベースの表示を保存し、グループ化、並べ替え、順序をカスタマイズできます。
-- **コレクション**: 元のファイルを移動・複製せずに、柔軟なコレクションでファイルを整理できます。
-- **ローカルAI検索**: テキスト検索、視覚的類似検索、被写体、顔クラスタリング、50以上の言語に対応する任意の多言語検索を利用できます。
-- **Apple Live Photos**: HEIC/MOVのペアを認識してビューアーで再生し、名前変更、移動、コピー、削除時には関連するMOVおよびAAEサイドカーファイルをまとめて扱います。
-- **RAW + JPEG/HEICペア**: 同じフォルダー内にある、同名のRAWファイルとJPEGまたはHEICの関連ファイルを、任意で1つの項目としてグループ化します。元のファイルは別々のままで、名前変更、移動、コピー、貼り付け、削除では両方のファイルをまとめて扱います。
-- **フォルダーファーストのワークフロー**: 複数ライブラリ、ドラッグ＆ドロップ読み込み、コピー＆ペースト読み込み、ファイルシステム同期、安全な移動/コピー/削除操作に対応します。
-- **選別と比較ツール**: 最大4枚の画像を比較できる4ペインの画像ビューアーを搭載しています。
-- **クリーンアップツール**: 重複ファイルを見つけ、不要なファイルを一括でゴミ箱へ移動できます。
-- **内蔵編集**: 切り抜き、回転、反転、リサイズ、基本的な画像調整に対応します。
-- **幅広い形式サポート**: 60以上の写真、RAW、動画形式に対応します。
+- **柔軟なライブラリ閲覧**：日付、フォルダー、場所、カメラ、レンズ、タグ、評価、顔で絞り込み、ランダム並び替えや小さい画像のフィルターにも対応。
+- **インタラクティブな地図表示**：現在のフィルターに沿って、位置情報付きの写真や動画をグループで探索。
+- **スマートアルバム**：ルールに基づく表示を保存し、グループ分けや並び順を設定。
+- **コレクションとタグ**：元ファイルを移動・複製せず、選択したファイルを一括整理。
+- **ローカル AI 検索**：テキスト、見た目の類似性、被写体、顔のグループ化に対応し、50 以上の言語での検索も選択可能。
+- **Apple Live Photos と Google Motion Photos**：動きの再生と共通のスマートアルバムフィルターに対応。
+- **RAW + JPEG/HEIC ペア**：1 つの項目として表示し、ファイル操作時は関連ファイルをまとめて処理。
+- **RAW サムネイルとプレビューの選択**：RAW レンダリングまたはカメラの埋め込みプレビューを使用。
+- **フォルダー中心のワークフロー**：複数ライブラリ、ドラッグ＆ドロップやコピー＆ペーストによる読み込み、同期、安全なファイル操作に対応。
+- **日付別の読み込み**：日・月・年別または単一フォルダーに整理し、元のファイル名を保持して重複をスキップ。
+- **選別・比較ツール**：4 分割の画像比較ビューアーを搭載。
+- **重複整理**：解放できる容量を確認し、複数の重複グループを一括整理。
+- **表示のカスタマイズ**：最大 1024 px のサムネイル、グリッドサイズと角の形状、クイックプレビューや独立ウィンドウを選択。
+- **デスクトップ連携**：複数の外部アプリと、macOS・Windows・GNOME Linux での壁紙設定に対応。
+- **内蔵編集機能**：切り抜き、回転、反転、サイズ変更、基本的な画像調整。
+- **幅広い形式に対応**：60 以上の写真・RAW・動画形式をサポート。
 
 ## メタデータ、コレクション、ファイルの移動
 
@@ -130,11 +133,13 @@ Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$env:APPDATA\com.july
 
 ### Linux
 
-Debianベースのディストリビューションでは、パッケージをアンインストールします：
+DEB でインストールした場合は、パッケージを削除します：
 
 ```bash
 sudo apt remove lap
 ```
+
+AppImage の場合は、Lap を終了し、ダウンロードした `.AppImage` ファイルを削除します。
 
 次に、Lapのデータベース、キャッシュ、設定ファイルをすべて削除します：
 
@@ -170,6 +175,8 @@ cd src-vite && pnpm install && cd ..
 cargo tauri dev
 ```
 
+配布パッケージでは、同梱の libheif と libde265 の代わりに、システムの libheif（1.17 以降）にリンクできます。ビルド時に `LAP_SYSTEM_LIBHEIF=1` を設定してください。この場合、サブモジュール `third_party/libheif` と `third_party/libde265` は不要です。HEVC のデコードは、システム libheif のコーデックプラグインに依存します。
+
 ## 対応形式
 
 Lapは60以上の写真、RAW、動画形式に対応しています。
@@ -180,9 +187,9 @@ Lapは60以上の写真、RAW、動画形式に対応しています。
 | RAW写真 | CR2, CR3, CRW, NEF, NRW, ARW, SRF, SR2, RAF, RW2, ORF, PEF, DNG, SRW, RWL, MRW, 3FR, MOS, DCR, KDC, ERF, MEF, RAW, MDC |
 | 動画 | MP4, MOV, M4V, MKV, AVI, FLV, TS/M2TS, WMV, WebM, 3GP/3G2, F4V, VOB, MPG/MPEG, ASF, DIVX など。H.264再生は全プラットフォームでサポートされており、ネイティブ再生が利用できない場合は自動的に互換性処理が行われます。HEVC/H.265およびVP9はmacOSでネイティブサポートされています。 |
 
-### Linuxでの動画再生に関する備考
+### Linuxでの動画再生
 
-Linux Mint/Ubuntu/Debianでは、動画再生のサポートを向上させるために以下のパッケージをインストールしてください：
+Lap は AppImage を含め、動画再生にシステムの GStreamer プラグインを使用します。Ubuntu、Debian、Linux Mint で動画が再生できない場合は、以下をインストールしてください：
 
 ```bash
 sudo apt install gstreamer1.0-libav gstreamer1.0-plugins-good
@@ -212,3 +219,7 @@ sudo apt install gstreamer1.0-libav gstreamer1.0-plugins-good
 ## ライセンス
 
 GPL-3.0-or-later。詳細は [LICENSE](../LICENSE) をご覧ください。
+
+## プライバシー
+
+データの取り扱いと任意のオンラインサービスについては、[プライバシーポリシー](../PRIVACY.md)をご覧ください。

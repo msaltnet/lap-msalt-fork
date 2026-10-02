@@ -1,6 +1,7 @@
 use tauri::{Builder, Wry};
 
 use crate::{t_image, t_sqlite};
+use crate::t_raw_display::{RawDisplayOptions, RawPreviewMode};
 
 fn text_response(status: http::StatusCode, body: &str) -> http::Response<Vec<u8>> {
     http::Response::builder()
@@ -78,6 +79,52 @@ fn image_response(data: Vec<u8>) -> http::Response<Vec<u8>> {
         .unwrap()
 }
 
+fn raw_display_options(query: Option<&str>) -> RawDisplayOptions {
+    let mut options = RawDisplayOptions::default();
+    for pair in query.unwrap_or_default().split('&') {
+        match pair {
+            "rawPreviewMode=embedded" => options.mode = RawPreviewMode::Embedded,
+            "rawPreviewMode=rendered" => options.mode = RawPreviewMode::Rendered,
+            "rawAutoBright=true" => options.auto_bright = true,
+            "rawPairDisplay=jpeg" => options.prefer_pair = true,
+            _ => {}
+        }
+    }
+    options
+}
+
+fn raw_image_response(data: Vec<u8>) -> http::Response<Vec<u8>> {
+    let mut response = image_response(data);
+    // Revalidate external companion changes even when the RAW itself is unchanged.
+    response.headers_mut().insert(http::header::CACHE_CONTROL, http::HeaderValue::from_static("no-cache"));
+    response
+}
+
+fn raw_preview_response(data: Vec<u8>, source: &'static str, unavailable: bool, pair: &'static str) -> http::Response<Vec<u8>> {
+    let mut response = raw_image_response(data);
+    let headers = response.headers_mut();
+    headers.insert("X-Raw-Source", http::HeaderValue::from_static(source));
+    headers.insert("X-Raw-Embedded-Unavailable", http::HeaderValue::from_static(if unavailable { "true" } else { "false" }));
+    headers.insert("X-Raw-Pair", http::HeaderValue::from_static(pair));
+    headers.insert(http::header::ACCESS_CONTROL_EXPOSE_HEADERS, http::HeaderValue::from_static("X-Raw-Source, X-Raw-Embedded-Unavailable, X-Raw-Pair"));
+    response
+}
+
+#[cfg(test)]
+mod raw_display_tests {
+    use super::*;
+
+    #[test]
+    fn raw_display_protocol_parses_modes_and_pair_policy() {
+        let options = raw_display_options(Some("v=42&rawPreviewMode=rendered&rawPairDisplay=jpeg"));
+        assert_eq!(options.mode, RawPreviewMode::Rendered);
+        assert!(options.prefer_pair);
+        assert_eq!(raw_display_options(Some("rawPreviewMode=embedded")).mode, RawPreviewMode::Embedded);
+        assert!(raw_display_options(Some("rawPreviewMode=embedded&rawAutoBright=true")).auto_bright);
+        assert!(!raw_display_options(None).prefer_pair);
+    }
+}
+
 pub fn register_protocols(builder: Builder<Wry>) -> Builder<Wry> {
     builder
         .register_asynchronous_uri_scheme_protocol("thumb", |_ctx, request, responder| {
@@ -97,8 +144,41 @@ pub fn register_protocols(builder: Builder<Wry>) -> Builder<Wry> {
                 return;
             }
 
+            let options = raw_display_options(request.uri().query());
+            let thumbnail_size = request.uri().query().unwrap_or_default().split('&')
+                .find_map(|part| part.strip_prefix("size=").and_then(|value| value.parse::<u32>().ok()))
+                .unwrap_or(512).clamp(64, 2048);
             let app_handle = _ctx.app_handle().clone();
             tauri::async_runtime::spawn(async move {
+                if let Ok(Some(file)) = t_sqlite::AFile::get_file_info(file_id) {
+                    if file.file_type == Some(3) {
+                        let permit = match t_sqlite::thumb_background_generation_permits().acquire_owned().await {
+                            Ok(permit) => permit,
+                            Err(_) => { responder.respond(text_response(http::StatusCode::SERVICE_UNAVAILABLE, "thumbnail queue closed")); return; }
+                        };
+                        let result = tauri::async_runtime::spawn_blocking(move || {
+                            let _permit = permit;
+                            // The queue can outlive a library switch. Re-read the
+                            // file only after validating and locking its library.
+                            crate::t_cmds::with_current_library(&library_id, || {
+                                let file = t_sqlite::AFile::get_file_info(file_id)?
+                                    .ok_or_else(|| "File not found".to_string())?;
+                                if file.file_type != Some(3) { return Err("File type changed".to_string()); }
+                                t_sqlite::AThumb::get_or_create_thumb(file_id, file.file_path.as_deref().unwrap_or_default(),
+                                    3, file.e_orientation.unwrap_or(1) as i32, thumbnail_size, options, false, None, None)
+                            })
+                        }).await;
+                        let response = match result {
+                            Ok(Ok(Some(thumb))) => match thumb.thumb_data {
+                                Some(data) => raw_image_response(data),
+                                None => text_response(http::StatusCode::NOT_FOUND, "thumbnail not found"),
+                            },
+                            _ => text_response(http::StatusCode::NOT_FOUND, "thumbnail not found"),
+                        };
+                        responder.respond(response);
+                        return;
+                    }
+                }
                 let response = match t_sqlite::AThumb::fetch_raw_for_library(file_id, &library_id) {
                     Ok(Some(data)) => image_response(data),
                     _ => {
@@ -115,6 +195,7 @@ pub fn register_protocols(builder: Builder<Wry>) -> Builder<Wry> {
                                     file_type,
                                     orientation,
                                     thumbnail_size,
+                                    options,
                                     album_id,
                                     false,
                                     None,
@@ -128,11 +209,14 @@ pub fn register_protocols(builder: Builder<Wry>) -> Builder<Wry> {
             });
         })
         .register_asynchronous_uri_scheme_protocol("preview", |_ctx, request, responder| {
-            // URL format: preview://localhost/{library_id}/{file_id}
+            // URL format: preview://localhost/{library_id}/{file_id}?rawPreviewMode=embedded
             // library_id is for browser cache isolation only; file_id is the last segment
             let path = request.uri().path();
             let file_id_str = path.rsplit('/').next().unwrap_or("");
             let file_id: i64 = file_id_str.parse().unwrap_or(0);
+            let options = raw_display_options(request.uri().query());
+            let for_editing = request.uri().query().unwrap_or_default().split('&')
+                .any(|param| param == "forEditing=true");
 
             if file_id <= 0 {
                 responder.respond(text_response(
@@ -150,6 +234,8 @@ pub fn register_protocols(builder: Builder<Wry>) -> Builder<Wry> {
                 }
             };
 
+            let is_raw = file.file_type == Some(3);
+            let companion = crate::t_raw_display::paired_file(file_id, RawDisplayOptions { prefer_pair: true, ..options });
             let file_path = match file.file_path {
                 Some(path) if !path.is_empty() => path,
                 _ => {
@@ -162,7 +248,40 @@ pub fn register_protocols(builder: Builder<Wry>) -> Builder<Wry> {
             };
 
             tauri::async_runtime::spawn(async move {
-                let response = match t_image::get_file_image_bytes_cached(&file_path).await {
+                if for_editing {
+                    // Use exactly the same pixels (including decoder fallbacks)
+                    // that get_edited_image applies the crop and adjustments to.
+                    let result = tauri::async_runtime::spawn_blocking(move || {
+                        tauri::async_runtime::block_on(t_image::get_generated_preview_bytes(&file_path))
+                    }).await;
+                    responder.respond(match result {
+                        Ok(Ok(Some(data))) => image_response(data),
+                        _ => text_response(http::StatusCode::NOT_FOUND, "editable preview not found"),
+                    });
+                    return;
+                }
+                let pair_label = companion.as_ref().and_then(|file| file.file_path.as_ref()).map(|path| {
+                    if t_image::is_heic_path(path) { "HEIC" } else { "JPEG" }
+                }).unwrap_or("");
+                if options.prefer_pair {
+                    if let Some(path) = companion.and_then(|file| file.file_path) {
+                        if let Ok(data) = t_image::get_file_image_bytes_cached(&path, options).await {
+                            if image::load_from_memory(&data).is_ok() {
+                                responder.respond(raw_preview_response(data, "pair", false, pair_label));
+                                return;
+                            }
+                        }
+                    }
+                }
+                if is_raw {
+                    let response = match t_image::get_raw_preview_cached(&file_path, options).await {
+                        Ok((data, source, unavailable)) => raw_preview_response(data, source, unavailable, pair_label),
+                        Err(_) => text_response(http::StatusCode::NOT_FOUND, "RAW preview not found"),
+                    };
+                    responder.respond(response);
+                    return;
+                }
+                let response = match t_image::get_file_image_bytes_cached(&file_path, options).await {
                     Ok(data) => image_response(data),
                     Err(_) => text_response(http::StatusCode::NOT_FOUND, "preview not found"),
                 };

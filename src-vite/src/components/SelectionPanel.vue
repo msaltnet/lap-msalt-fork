@@ -23,7 +23,7 @@
             {{ $t('info_panel.select_title') }}
           </span>
           <span
-            class="ml-auto min-w-0 truncate text-right text-[11px] font-semibold text-base-content/70"
+            class="ml-auto min-w-0 truncate text-right text-[10px] font-semibold text-base-content/30"
           >
             {{ selectionSummaryText }}
           </span>
@@ -147,7 +147,7 @@
         </div>
         <div class="flex flex-wrap items-center gap-1">
           <PanelActionButton
-            :icon="IconMove"
+            :icon="IconFileArrowRight"
             :disabled="selectedCount === 0"
             @click="$emit('moveWithinLibrary')"
           >
@@ -171,7 +171,7 @@
             danger
             @click="$emit('trash')"
           >
-            {{ $t('menu.file.move_to_trash') }}
+            {{ $t('menu.file.delete') }}
           </PanelActionButton>
         </div>
 
@@ -187,8 +187,8 @@
             v-for="item in visibleMoreActions"
             :key="item.label"
             :icon="item.icon"
-            :disabled="Boolean(item.disabled)"
-            @click="$emit('moreAction', item.action)"
+            :disabled="selectedCount === 0 || Boolean(item.disabled)"
+            @click="onMoreActionClick(item, $event)"
           >
             {{ item.label }}
           </PanelActionButton>
@@ -215,7 +215,7 @@ import {
   IconUnChecked,
   IconClose,
   IconComment,
-  IconMove,
+  IconFileArrowRight,
   IconRotate,
   IconTag,
   IconTrash,
@@ -253,7 +253,7 @@ const props = defineProps({
   },
 });
 
-defineEmits([
+const emit = defineEmits([
   'close',
   'selectAll',
   'selectNone',
@@ -273,6 +273,7 @@ defineEmits([
   'removeFromCollection',
   'unselectFile',
   'moreAction',
+  'moreActionMenu',
 ]);
 
 const { locale, messages, t } = useI18n();
@@ -353,7 +354,15 @@ const rotateDisplayLabel = computed(() => {
 });
 
 const visibleMoreActions = computed(() =>
-  props.moreActions.filter((item: any) => item?.label && item?.action && !item.hidden)
+  props.moreActions.filter((item: any) => item?.label && !item.hidden && (item.action || item.children?.length))
 );
+
+// Items with a direct action fire immediately; submenu parents (e.g. "Open in
+// external app...") hand the click to the parent so it can pop the same
+// ContextMenu submenu the right-click menu uses.
+function onMoreActionClick(item: any, event: MouseEvent) {
+  if (item?.children?.length) emit('moreActionMenu', item, event);
+  else emit('moreAction', item.action);
+}
 
 </script>

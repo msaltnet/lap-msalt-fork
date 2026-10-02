@@ -9,14 +9,10 @@
   </p>
 </div>
 
-[English](../README.md) [Deutsch](README.de.md) | [Français](README.fr.md) | [Español](README.es.md) | [Português](README.pt.md) | [Русский](README.ru.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md) | 한국어 |
+[English](../README.md) | [Deutsch](README.de.md) | [Español](README.es.md) | [Français](README.fr.md) | [Italiano](README.it.md) | [Magyar](README.hu.md) | [Nederlands](README.nl.md) | [Polski](README.pl.md) | [Português](README.pt.md) | [Русский](README.ru.md) | [Українська](README.uk.md) | [中文简体](README.zh-CN.md) | [中文繁體](README.zh-TW.md) | [日本語](README.ja.md) | 한국어
 
 Lap은 오픈 소스 기반의 '로컬 우선(local-first)' 사진 관리 도구입니다. 가족 앨범을 둘러보고, 오래된 사진을 빠르게 찾으며, 대규모 개인 미디어 라이브러리를 오프라인에서 직접 관리할 수 있도록 설계되었습니다.
 클라우드 사진 서비스의 개인정보 보호 대안으로서, 강제 업로드 없음, 로컬 AI 검색, 폴더 우선 워크플로우를 제공하며 완전히 무료로 사용할 수 있습니다.
-
-- 웹사이트: [https://julyx10.github.io/lap/](https://julyx10.github.io/lap/)
-- 데모 비디오: [https://youtu.be/RbKqNKhbVUs](https://youtu.be/RbKqNKhbVUs)
-- 개인정보 처리방침: [PRIVACY.md](../PRIVACY.md)
 
 ## Lap 다운로드
 
@@ -26,7 +22,8 @@ Lap은 오픈 소스 기반의 '로컬 우선(local-first)' 사진 관리 도구
 | :-- | :-- | :-- |
 | **macOS (Apple Silicon / Intel)** | `_aarch64.dmg` / `_x64.dmg` | Apple 공증 완료 |
 | **Windows 10/11 (x64 / ARM64)** | `_x64_en-US.msi` / `_arm64_en-US.msi` | 서명되지 않음 — SmartScreen이 다운로드를 차단하면 **보관**을 클릭하세요 |
-| **Linux (amd64 / arm64)** | `_amd64.deb` / `_arm64.deb` | Debian 기반 배포판용（Ubuntu, Debian, Linux Mint 등） |
+| **Linux (x64 / ARM64)** | `_amd64.deb` / `_arm64.deb` | Debian 기반 배포판용（Ubuntu, Debian, Linux Mint 등） |
+| **Linux (x64 / ARM64)** | `_amd64.AppImage` / `_aarch64.AppImage` | 파일에 실행 권한을 부여한 다음 더블 클릭하여 실행 |
 
 ### Homebrew로 macOS에 설치
 
@@ -38,7 +35,8 @@ brew install --cask lap
 ## 스크린샷
 
 <p align="center">
-  <img src="../docs/public/screenshots/Lap_0.3.0_main_1.png" alt="Lap 로컬 사진 라이브러리 관리 스크린샷" width="900">
+  <img src="../docs/public/screenshots/lap_library.png" alt="Lap 로컬 사진 라이브러리 관리" width="900">
+  <img src="../docs/public/screenshots/lap_map_view.png" alt="Lap 지도 보기" width="900">
 </p>
 
 ## 왜 Lap인가요?
@@ -51,17 +49,22 @@ brew install --cask lap
 
 ## 주요 기능
 
-- **유연한 라이브러리 탐색**: 타임라인, 폴더, 위치, 카메라, 렌즈, 태그, 즐겨찾기, 평점, 피사체, 얼굴 필터를 제공합니다.
-- **스마트 앨범**: 규칙 기반 보기를 저장하고 그룹화, 정렬, 순서를 사용자 지정할 수 있습니다.
-- **컬렉션**: 원본 파일을 이동하거나 복제하지 않고 유연한 컬렉션으로 파일을 정리할 수 있습니다.
-- **로컬 AI 검색**: 텍스트 프롬프트, 시각적 유사도, 피사체, 얼굴 클러스터링, 50개 이상 언어의 선택적 다국어 검색을 지원합니다.
-- **Apple Live Photos**: HEIC/MOV 쌍을 인식해 뷰어에서 재생하고, 이름 변경, 이동, 복사, 삭제 시 연결된 MOV 및 AAE 사이드카 파일을 함께 처리합니다.
-- **RAW + JPEG/HEIC 쌍**: 같은 폴더에서 이름이 같은 RAW 파일과 JPEG 또는 HEIC 짝 파일을 선택적으로 하나의 항목으로 그룹화합니다. 원본은 별도 파일로 유지되며, 이름 변경, 이동, 복사, 붙여넣기, 삭제 시 두 파일을 함께 처리합니다.
-- **폴더 우선 워크플로**: 다중 라이브러리, 드래그 앤 드롭 가져오기, 복사/붙여넣기 가져오기, 파일 시스템 동기화, 안전한 이동/복사/삭제 작업을 지원합니다.
-- **선별 및 비교 도구**: 최대 4장의 이미지를 비교할 수 있는 4분할 이미지 뷰어를 제공합니다.
-- **정리 도구**: 중복 파일을 찾고 불필요한 파일을 휴지통으로 일괄 이동할 수 있습니다.
-- **내장 편집**: 자르기, 회전, 뒤집기, 크기 조절 및 기본 이미지 보정을 지원합니다.
-- **광범위한 포맷 지원**: 60개 이상의 사진, RAW, 비디오 포맷을 지원합니다.
+- **유연한 라이브러리 탐색**: 날짜, 폴더, 위치, 카메라, 렌즈, 태그, 평점, 얼굴별 필터와 무작위 정렬, 작은 이미지 필터를 지원합니다.
+- **대화형 지도 보기**: 현재 필터에 맞는 위치 정보가 있는 사진과 동영상을 그룹으로 탐색합니다.
+- **스마트 앨범**: 규칙 기반 보기를 저장하고 그룹화와 정렬을 설정합니다.
+- **컬렉션과 태그**: 원본을 이동하거나 복제하지 않고 선택한 파일을 일괄 정리합니다.
+- **로컬 AI 검색**: 텍스트, 시각적 유사성, 피사체, 얼굴 그룹화를 지원하며 50개 이상의 언어로 검색할 수 있습니다.
+- **Apple Live Photos와 Google Motion Photos**: 움직임 재생과 통합 스마트 앨범 필터를 지원합니다.
+- **RAW + JPEG/HEIC 쌍**: 하나의 항목으로 표시하고 파일 작업 시 연결된 파일을 함께 처리합니다.
+- **RAW 썸네일과 미리보기 선택**: RAW 렌더링 또는 카메라에 내장된 미리보기를 사용합니다.
+- **폴더 중심 작업 흐름**: 여러 라이브러리, 끌어서 놓기 및 복사·붙여넣기 가져오기, 파일 시스템 동기화와 안전한 파일 작업을 지원합니다.
+- **날짜별 가져오기**: 일별, 월별, 연도별 또는 단일 폴더로 정리하고 원래 파일명을 유지하며 중복을 건너뜁니다.
+- **사진 선별 및 비교 도구**: 4분할 이미지 비교 뷰어를 제공합니다.
+- **중복 정리**: 확보할 수 있는 공간을 확인하고 여러 중복 그룹을 일괄 정리합니다.
+- **보기 설정**: 최대 1024 px 썸네일, 격자 크기와 모서리 모양, 빠른 미리보기 또는 별도 뷰어 창을 선택합니다.
+- **데스크톱 연동**: 여러 외부 앱과 macOS, Windows, GNOME Linux의 배경화면 설정을 지원합니다.
+- **내장 편집**: 자르기, 회전, 뒤집기, 크기 변경과 기본 이미지 조정을 지원합니다.
+- **폭넓은 형식 지원**: 60개 이상의 사진, RAW, 동영상 형식을 지원합니다.
 
 ## 메타데이터, 컬렉션 및 파일 이동
 
@@ -130,11 +133,13 @@ Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$env:APPDATA\com.july
 
 ### Linux
 
-Debian 기반 배포판에서는 패키지를 제거하세요:
+DEB로 설치한 경우 패키지를 제거합니다:
 
 ```bash
 sudo apt remove lap
 ```
+
+AppImage로 설치한 경우 Lap을 종료하고 다운로드한 `.AppImage` 파일을 삭제합니다.
 
 그런 다음 Lap 데이터베이스, 캐시 및 설정 파일을 모두 삭제하세요:
 
@@ -170,6 +175,8 @@ cd src-vite && pnpm install && cd ..
 cargo tauri dev
 ```
 
+배포 패키지는 번들된 libheif와 libde265 대신 시스템 libheif(1.17 이상)에 링크할 수 있습니다. 빌드 시 `LAP_SYSTEM_LIBHEIF=1`을(를) 설정하세요. 그러면 `third_party/libheif` 및 `third_party/libde265` 하위 모듈이 필요하지 않습니다. HEVC 디코딩은 시스템 libheif의 코덱 플러그인에 따라 달라집니다.
+
 ## 지원 포맷
 
 Lap은 60개 이상의 사진, RAW, 비디오 포맷을 지원합니다.
@@ -180,9 +187,9 @@ Lap은 60개 이상의 사진, RAW, 비디오 포맷을 지원합니다.
 | RAW 사진 | CR2, CR3, CRW, NEF, NRW, ARW, SRF, SR2, RAF, RW2, ORF, PEF, DNG, SRW, RWL, MRW, 3FR, MOS, DCR, KDC, ERF, MEF, RAW, MDC |
 | 비디오 | MP4, MOV, M4V, MKV, AVI, FLV, TS/M2TS, WMV, WebM, 3GP/3G2, F4V, VOB, MPG/MPEG, ASF, DIVX 등. H.264 재생은 모든 플랫폼에서 지원되며, 네이티브 재생이 불가한 경우 자동으로 호환성 처리가 진행됩니다. HEVC/H.265 및 VP9은 macOS에서 네이티브 지원됩니다. |
 
-### Linux 비디오 재생 참고 사항
+### Linux 동영상 재생
 
-Linux Mint/Ubuntu/Debian 사용자는 더 원활한 비디오 재생을 위해 아래 패키지를 설치해야 합니다.
+Lap은 AppImage에서도 시스템 GStreamer 플러그인을 사용하여 동영상을 재생합니다. Ubuntu, Debian 또는 Linux Mint에서 동영상이 재생되지 않으면 다음 패키지를 설치하세요:
 
 ```bash
 sudo apt install gstreamer1.0-libav gstreamer1.0-plugins-good
@@ -212,3 +219,7 @@ sudo apt install gstreamer1.0-libav gstreamer1.0-plugins-good
 ## 라이선스
 
 GPL-3.0-or-later. 자세한 내용은 [LICENSE](../LICENSE)를 참조하세요.
+
+## 개인정보 보호
+
+데이터 처리와 선택적 온라인 서비스에 대한 자세한 내용은 [개인정보 처리방침](../PRIVACY.md)을 참조하세요.

@@ -3,8 +3,23 @@
  */
 import { defineStore } from 'pinia';
 import { getCurrentLibraryState, saveLibraryState, getAppConfig } from '@/common/api';
-import { LIB_ITEM } from '@/common/constants';
+import { CULLING, LIB_ITEM } from '@/common/constants';
 import { setThumbLibraryId } from '@/common/utils';
+
+// The app-level deep watcher calls save() for every store mutation. Keep the
+// last actual payload per library so runtime-only count refreshes do not turn
+// into redundant backend writes.
+const lastSavedPayloads = new Map();
+
+export const createEmptyLibraryCounts = () => ({
+  all: 0,
+  favorite: 0,
+  today: 0,
+  rated: 0,
+  unrated: 0,
+  ratings: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
+  culling: { [CULLING.PICK]: 0, [CULLING.REJECT]: 0, [CULLING.UNREVIEWED]: 0 },
+});
 
 export const useLibraryStore = defineStore('libraryStore', {
   state: () => ({
@@ -12,27 +27,31 @@ export const useLibraryStore = defineStore('libraryStore', {
     _libraryId: null,
     _initialized: false,
 
+
     // Per-library state
     /** @type {'main' | 'collection'} */
     activePane: 'main',
 
-    /** @type {{ item: 'all-files' | 'favorites' | 'ratings' | 'culling' | 'subjects' | 'on-this-day', smartId: string | null, ratingsExpanded: boolean, cullingExpanded: boolean, subjectsExpanded: boolean, subjectCounts: Record<string, number> }} */
+    /** @type {{ item: 'all-files' | 'favorites' | 'ratings' | 'culling' | 'subjects' | 'on-this-day', smartId: string | null, ratingsExpanded: boolean, cullingExpanded: boolean, subjectsExpanded: boolean, subjectCounts: Record<string, number>, counts: { all: number, favorite: number, today: number, rated: number, unrated: number, ratings: Record<number, number>, culling: Record<string, number> } }} */
     library: {
       item: LIB_ITEM.ALL,
       smartId: null,
       ratingsExpanded: true,
       cullingExpanded: true,
       subjectsExpanded: true,
+      activateTick: 0,
       subjectCounts: {},
+      counts: createEmptyLibraryCounts(),
     },
 
-    /** @type {{ id: number, folderId: number | null, folderPath: string, selected: boolean, activateTick: number }} */
+    /** @type {{ id: number, folderId: number | null, folderPath: string, selected: boolean, activateTick: number, counts: Record<string, number> }} */
     album: {
       id: 0,                  // current album id (0: show all files)
       folderId: null,         // current folder id
       folderPath: '',         // current folder path
       selected: false,        // album is selected
       activateTick: 0,        // increments on each album/folder click (even same target)
+      counts: {},
     },
 
     /** @type {{ type: 'system' | 'custom', id: string | number | null }} */
@@ -44,9 +63,11 @@ export const useLibraryStore = defineStore('libraryStore', {
     /** @type {Array<{ id: string, name: string, description: string, source: 'rules', query: { version: number, match: 'all' | 'any', rules: Array<{ id: string, field: string, operator: string, value: any }> }, group: { type: number }, sort: { type: number, order: number }, coverFileId: number | null, count: number | null, createdAt: number, updatedAt: number }>} */
     smartAlbums: [],          // custom smart albums
 
-    /** @type {{ selectedId: number | null }} */
+    /** @type {{ selectedId: number | null, activateTick: number, counts: Record<string, number> }} */
     collection: {
       selectedId: null,      // selected collection id
+      activateTick: 0,
+      counts: {},
     },
 
     /** @type {{ item: number | null }} */
@@ -58,9 +79,13 @@ export const useLibraryStore = defineStore('libraryStore', {
       item: 'pick',
     },
 
-    /** @type {{ id: number | null }} */
+    /** @type {{ id: number | null, groupId: number | null, collapsedGroupIds: number[], activateTick: number, counts: Record<string, number> }} */
     tag: {
       id: null,
+      groupId: null,
+      collapsedGroupIds: [],
+      activateTick: 0,
+      counts: {},
     },
 
     /** @type {{ year: number | null, month: number | null, date: number | null }} */
@@ -155,6 +180,7 @@ export const useLibraryStore = defineStore('libraryStore', {
 
         this._initialized = true;
 
+
         // Always pause on restart — never auto-resume scanning
         if (this.index.status === 1) {
           this.index.status = 2;
@@ -177,17 +203,63 @@ export const useLibraryStore = defineStore('libraryStore', {
       await this.init();          // re-read current library id + state from backend
     },
 
+    /**
+     * Invalidate counts after album exclusions change. Real-time
+     * aggregates are runtime-only; delayed counts are also cleared here before
+     * their next explicit item activation. Folder file counts are ephemeral
+     * and cleared separately via clearFolderFileCounts().
+     */
+    clearLazySidebarCounts() {
+      this.library.counts = createEmptyLibraryCounts();
+      this.library.subjectCounts = {};
+      this.album.counts = {};
+      this.tag.counts = {};
+      this.collection.counts = {};
+      if (Array.isArray(this.smartAlbums) && this.smartAlbums.some((album) => album?.count != null)) {
+        this.smartAlbums = this.smartAlbums.map((album) => ({ ...album, count: null }));
+      }
+      const history = this.search.searchHistory;
+      if (Array.isArray(history) && history.some((item) => typeof item !== 'string' && item?.count != null)) {
+        this.search.searchHistory = history.map((item) =>
+          typeof item === 'string' ? item : { ...item, count: null },
+        );
+      }
+    },
+
     async save() {
       if (this._libraryId && this._initialized) {
         try {
-          const stateToSave = {
-            library: this.library,
-            album: this.album,
+          // These panels now obtain their counts from live grouped aggregates.
+          // Keep the values in memory for rendering, but never persist them.
+          const {
+            counts: _libraryCounts,
+            activateTick: _libraryActivateTick,
+            ...libraryState
+          } = this.library;
+          const {
+            counts: _albumCounts,
+            activateTick: _albumActivateTick,
+            ...albumState
+          } = this.album;
+          const {
+            counts: _collectionCounts,
+            activateTick: _collectionActivateTick,
+            ...collectionState
+          } = this.collection;
+          const {
+            counts: _tagCounts,
+            activateTick: _tagActivateTick,
+            ...tagState
+          } = this.tag;
+            const stateToSave = {
+            library: libraryState,
+            album: albumState,
             smartAlbum: this.smartAlbum,
             smartAlbums: this.smartAlbums,
-            collection: this.collection,
+            collection: collectionState,
             rating: this.rating,
-            tag: this.tag,
+            culling: this.culling,
+            tag: tagState,
             calendar: this.calendar,
             camera: this.camera,
             location: this.location,
@@ -207,10 +279,13 @@ export const useLibraryStore = defineStore('libraryStore', {
               searchTotal: this.index.searchTotal,
               failed: this.index.failed,
             },
-            person: this.person,
-          };
-          
+              person: this.person,
+            };
+
+          const payload = JSON.stringify(stateToSave);
+          if (lastSavedPayloads.get(this._libraryId) === payload) return;
           await saveLibraryState(this._libraryId, stateToSave);
+          lastSavedPayloads.set(this._libraryId, payload);
         } catch (error) {
           console.error('Failed to save library state:', error);
         }

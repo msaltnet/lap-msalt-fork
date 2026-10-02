@@ -153,9 +153,11 @@ pub struct LibraryPanelState {
     pub smart_id: Option<String>,
     #[serde(default = "default_ratings_expanded", alias = "ratings_expanded")]
     pub ratings_expanded: bool,
+    #[serde(default = "default_culling_expanded", alias = "culling_expanded")]
+    pub culling_expanded: bool,
     #[serde(default = "default_subjects_expanded", alias = "subjects_expanded")]
     pub subjects_expanded: bool,
-    #[serde(default, alias = "subject_counts")]
+    #[serde(default)]
     pub subject_counts: HashMap<String, i64>,
 }
 
@@ -164,6 +166,10 @@ fn default_library_item() -> String {
 }
 
 fn default_subjects_expanded() -> bool {
+    true
+}
+
+fn default_culling_expanded() -> bool {
     true
 }
 
@@ -177,6 +183,7 @@ impl Default for LibraryPanelState {
             item: default_library_item(),
             smart_id: None,
             ratings_expanded: default_ratings_expanded(),
+            culling_expanded: default_culling_expanded(),
             subjects_expanded: default_subjects_expanded(),
             subject_counts: HashMap::new(),
         }
@@ -191,8 +198,31 @@ pub struct RatingState {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CullingState {
+    #[serde(default = "default_culling_item")]
+    pub item: String,
+}
+
+fn default_culling_item() -> String {
+    "pick".to_string()
+}
+
+impl Default for CullingState {
+    fn default() -> Self {
+        Self {
+            item: default_culling_item(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TagState {
     pub id: Option<i64>,
+    #[serde(default)]
+    pub group_id: Option<i64>,
+    #[serde(default)]
+    pub collapsed_group_ids: Vec<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -214,7 +244,11 @@ pub struct CameraState {
 
 impl Default for TagState {
     fn default() -> Self {
-        Self { id: None }
+        Self {
+            id: None,
+            group_id: None,
+            collapsed_group_ids: Vec::new(),
+        }
     }
 }
 
@@ -325,6 +359,8 @@ pub struct LibraryState {
     pub smart_albums: Vec<CustomSmartAlbumState>,
     #[serde(default)]
     pub rating: RatingState,
+    #[serde(default)]
+    pub culling: CullingState,
     pub tag: TagState,
     pub calendar: CalendarState,
     pub camera: CameraState,
@@ -796,9 +832,11 @@ pub struct LibraryInfo {
     pub db_file_path: String,
     pub file_count: i64,
     pub total_size: i64,
+    pub thumb_cache_size: i64,
 }
 
 pub fn get_library_info(id: &str) -> Result<LibraryInfo, String> {
+    let _lease = t_storage::DbConnectionLease::acquire()?;
     let db_path = t_storage::get_library_db_path(id)?;
 
     // Get db file size
@@ -820,12 +858,43 @@ pub fn get_library_info(id: &str) -> Result<LibraryInfo, String> {
         )
         .unwrap_or((0, 0));
 
+    // Sum thumbnail cache size (jpg/png files under cache_dir/{id}/).
+    // Best-effort: any IO error just contributes 0 rather than failing the call.
+    let thumb_cache_size = get_thumb_cache_size(id);
+
     Ok(LibraryInfo {
         db_file_size,
         db_file_path: db_path,
         file_count,
         total_size,
+        thumb_cache_size,
     })
+}
+
+fn get_thumb_cache_size(library_id: &str) -> i64 {
+    let Ok(cache_root) = get_app_cache_dir().map(|p| p.join(library_id)) else {
+        return 0;
+    };
+    if !cache_root.is_dir() {
+        return 0;
+    }
+    let mut total: i64 = 0;
+    for entry in walkdir::WalkDir::new(&cache_root).into_iter().filter_map(|e| e.ok()) {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let is_thumb = matches!(
+            entry.path().extension().and_then(|ext| ext.to_str()),
+            Some("jpg" | "png")
+        );
+        if !is_thumb {
+            continue;
+        }
+        if let Ok(md) = entry.metadata() {
+            total = total.saturating_add(md.len() as i64);
+        }
+    }
+    total
 }
 
 /// Save library state

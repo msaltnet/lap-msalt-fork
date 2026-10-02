@@ -1,5 +1,5 @@
 <template>
-  <ModalDialog :title="title" :width="500" @cancel="clickCancel">
+  <ModalDialog :title="title" :width="500" position-key="move-to" @cancel="clickCancel">
     <!-- select album and folder -->
     <div class="h-[400px] overflow-auto">
       <AlbumList ref="albumListRef" 

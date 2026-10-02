@@ -109,6 +109,7 @@ fn get_migrations() -> Vec<Migration> {
                     group_id INTEGER NOT NULL,
                     file_id INTEGER NOT NULL,
                     score REAL NOT NULL,
+                    is_keep INTEGER NOT NULL DEFAULT 0,
                     PRIMARY KEY (group_id, file_id),
                     FOREIGN KEY (group_id) REFERENCES similarity_groups(id) ON DELETE CASCADE,
                     FOREIGN KEY (file_id) REFERENCES afiles(id) ON DELETE CASCADE
@@ -134,6 +135,31 @@ fn get_migrations() -> Vec<Migration> {
         },
         Migration {
             version: 14,
+            description: "Store scan totals",
+            sql: "",
+        },
+        Migration {
+            version: 15,
+            description: "Persist visual similarity keep state",
+            sql: "",
+        },
+        Migration {
+            version: 16,
+            description: "Add motion photo offset",
+            sql: "",
+        },
+        Migration {
+            version: 17,
+            description: "Add tag groups and persistent ordering",
+            sql: "",
+        },
+        Migration {
+            version: 18,
+            description: "Album scan scope and pixel filters",
+            sql: "",
+        },
+        Migration {
+            version: 19,
             description: "Create local AI caption storage",
             sql: "
                 CREATE TABLE IF NOT EXISTS ai_captions (
@@ -426,6 +452,57 @@ pub fn check_and_migrate(conn: &Connection) -> Result<(), String> {
                     [],
                 )
                 .map_err(|e| format!("Migration 13 failed creating inode index: {}", e))?;
+            } else if migration.version == 14 {
+                for column in ["skipped_count", "skipped_size", "failed_count", "failed_size", "merged_count", "merged_size"] {
+                    if !table_has_column(conn, "albums", column)? {
+                        conn.execute(
+                            &format!("ALTER TABLE albums ADD COLUMN {} INTEGER NOT NULL DEFAULT 0", column),
+                            [],
+                        )
+                        .map_err(|e| format!("Migration 14 failed adding {}: {}", column, e))?;
+                    }
+                }
+            } else if migration.version == 15 {
+                if !table_has_column(conn, "similarity_group_items", "is_keep")? {
+                    conn.execute(
+                        "ALTER TABLE similarity_group_items ADD COLUMN is_keep INTEGER NOT NULL DEFAULT 0",
+                        [],
+                    )
+                    .map_err(|e| format!("Migration 15 failed adding is_keep: {}", e))?;
+                    conn.execute_batch(
+                        "UPDATE similarity_group_items
+                         SET is_keep = 1
+                         WHERE EXISTS (
+                             SELECT 1
+                             FROM similarity_groups g
+                             WHERE g.id = similarity_group_items.group_id
+                               AND g.representative_file_id = similarity_group_items.file_id
+                         );",
+                    )
+                    .map_err(|e| format!("Migration 15 failed initializing keep state: {}", e))?;
+                }
+            } else if migration.version == 16 {
+                if !table_has_column(conn, "afiles", "motion_photo_offset")? {
+                    conn.execute("ALTER TABLE afiles ADD COLUMN motion_photo_offset INTEGER", [])
+                        .map_err(|e| {
+                            format!("Migration 16 failed adding motion_photo_offset: {}", e)
+                        })?;
+                }
+            } else if migration.version == 17 {
+                migrate_tag_groups(conn)?;
+            } else if migration.version == 18 {
+                let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+                for (column, definition) in [
+                    ("file_types", "INTEGER NOT NULL DEFAULT 7"),
+                    ("small_image_filter", "INTEGER NOT NULL DEFAULT 0"),
+                    ("excluded_folders", "TEXT NOT NULL DEFAULT '[]'"),
+                ] {
+                    if !table_has_column(&tx, "albums", column)? {
+                        tx.execute(&format!("ALTER TABLE albums ADD COLUMN {column} {definition}"), [])
+                            .map_err(|e| e.to_string())?;
+                    }
+                }
+                tx.commit().map_err(|e| e.to_string())?;
             } else if !migration.sql.trim().is_empty() {
                 conn.execute_batch(migration.sql)
                     .map_err(|e| format!("Migration {} failed: {}", migration.version, e))?;
@@ -448,16 +525,71 @@ pub fn check_and_migrate(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
+// Idempotent and atomic, including when a previous migration run was interrupted.
+pub(crate) fn migrate_tag_groups(conn: &Connection) -> Result<(), String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    tx.execute_batch("CREATE TABLE IF NOT EXISTS atag_groups (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        is_default INTEGER NOT NULL DEFAULT 0 CHECK(is_default IN (0, 1))
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_atag_groups_default
+        ON atag_groups(is_default) WHERE is_default = 1;
+    INSERT INTO atag_groups(name, is_default)
+        SELECT 'Default', 1 WHERE NOT EXISTS (SELECT 1 FROM atag_groups WHERE is_default = 1);")
+        .map_err(|e| e.to_string())?;
+    if !table_has_column(&tx, "atags", "group_id")? {
+        tx.execute_batch("ALTER TABLE atags ADD COLUMN group_id INTEGER REFERENCES atag_groups(id);")
+            .map_err(|e| e.to_string())?;
+    }
+    tx.execute_batch("UPDATE atags SET group_id = (SELECT id FROM atag_groups WHERE is_default = 1)
+        WHERE group_id IS NULL;
+        CREATE INDEX IF NOT EXISTS idx_atags_group_id ON atags(group_id);
+        CREATE TRIGGER IF NOT EXISTS protect_default_tag_group_delete BEFORE DELETE ON atag_groups
+        WHEN OLD.is_default = 1 BEGIN SELECT RAISE(ABORT, 'Cannot delete Default'); END;
+        CREATE TRIGGER IF NOT EXISTS protect_default_tag_group_update BEFORE UPDATE ON atag_groups
+        WHEN NEW.is_default != OLD.is_default OR (OLD.is_default = 1 AND NEW.name != OLD.name)
+        BEGIN SELECT RAISE(ABORT, 'Cannot rename or replace Default'); END;
+        CREATE TRIGGER IF NOT EXISTS assign_default_tag_group AFTER INSERT ON atags
+        WHEN NEW.group_id IS NULL BEGIN UPDATE atags
+        SET group_id = (SELECT id FROM atag_groups WHERE is_default = 1) WHERE id = NEW.id; END;
+        CREATE TRIGGER IF NOT EXISTS require_tag_group BEFORE UPDATE OF group_id ON atags
+        WHEN NEW.group_id IS NULL BEGIN SELECT RAISE(ABORT, 'Tag group is required'); END;")
+        .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
-mod tests {
+mod album_filter_migration_tests {
     use super::*;
 
     #[test]
-    fn migrates_version_13_to_ai_captions_version_14() {
+    fn album_filter_migration_is_restartable_and_defaults_to_off() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE albums(id INTEGER PRIMARY KEY); INSERT INTO albums VALUES(1); PRAGMA user_version=17;").unwrap();
+        check_and_migrate(&conn).unwrap();
+        let settings: (i64, Option<i64>, String) = conn.query_row(
+            "SELECT file_types,small_image_filter,excluded_folders FROM albums", [],
+            |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).unwrap();
+        assert_eq!(settings, (7,Some(0),"[]".into()));
+        // Simulate migration completing before the version was persisted.
+        conn.execute_batch("PRAGMA user_version=17;").unwrap();
+        check_and_migrate(&conn).unwrap();
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0)).unwrap(),18);
+    }
+}
+
+#[cfg(test)]
+mod ai_caption_migration_tests {
+    use super::*;
+
+    #[test]
+    fn migrates_version_18_to_ai_captions_version_19() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "PRAGMA foreign_keys = ON;
-             PRAGMA user_version = 13;
+             PRAGMA user_version = 18;
              CREATE TABLE afiles (id INTEGER PRIMARY KEY);",
         )
         .unwrap();
@@ -474,7 +606,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(version, 14);
+        assert_eq!(version, 19);
         assert_eq!(table_count, 1);
     }
 }

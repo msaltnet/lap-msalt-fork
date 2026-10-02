@@ -17,7 +17,7 @@
       <transition name="fade">
         <div v-if="isDropDown" 
           ref="menu"
-          class="menu select-none text-base-content/70 bg-base-200/80 backdrop-blur-md border border-base-content/30 absolute rounded-box shadow-lg z-500"
+          class="menu select-none text-base-content/70 bg-base-200/80 backdrop-blur-md border border-base-content/30 absolute rounded-box shadow-lg z-700"
           :style="menuStyle"
         >
           <!-- menu items -->
@@ -68,7 +68,7 @@
         <div
           v-if="activeSubmenuItem?.children?.length"
           ref="submenu"
-          class="menu select-none fixed text-base-content/70 bg-base-200/80 backdrop-blur-md border border-base-content/30 rounded-box shadow-lg min-w-max z-510"
+          class="menu select-none fixed text-base-content/70 bg-base-200/80 backdrop-blur-md border border-base-content/30 rounded-box shadow-lg min-w-max z-710"
           :style="submenuStyle"
           @mouseenter="cancelSubmenuClose"
           @mouseleave="scheduleSubmenuClose(activeSubmenuIndex)"

@@ -30,6 +30,7 @@ use uuid::Uuid;
 use walkdir::WalkDir;
 
 use crate::{t_jxl, t_libraw, t_utils};
+use crate::t_raw_display::RawDisplayOptions;
 
 #[derive(Default)]
 pub struct CaptureSettings {
@@ -130,6 +131,11 @@ pub fn get_image_dimensions(file_path: &str) -> Result<(u32, u32), String> {
     if is_heic_path(file_path) {
         if let Ok(dimensions) = crate::t_heif::get_heif_dimensions(file_path) {
             return Ok(dimensions);
+        }
+        if let Ok(metadata) = crate::t_video::get_video_metadata(file_path) {
+            if metadata.width > 0 && metadata.height > 0 {
+                return Ok((metadata.width, metadata.height));
+            }
         }
     }
 
@@ -374,6 +380,11 @@ fn apply_orientation(img: DynamicImage, orientation: i32) -> DynamicImage {
     }
 }
 
+/// Minimum short edge as a fraction of `thumbnail_size` (1/4).
+const MIN_SHORT_EDGE_DIVISOR: u32 = 4;
+
+/// Computes thumbnail dimensions, keeping the short edge >= `thumbnail_size / 4`
+/// (never upscaling); the long edge may exceed `thumbnail_size`.
 fn compute_thumbnail_dimensions(width: u32, height: u32, thumbnail_size: u32) -> (u32, u32) {
     if width == 0 || height == 0 || thumbnail_size == 0 {
         return (1, 1);
@@ -383,8 +394,17 @@ fn compute_thumbnail_dimensions(width: u32, height: u32, thumbnail_size: u32) ->
         return (width.max(1), height.max(1));
     }
 
-    let max_edge = width.max(height) as f32;
-    let scale = thumbnail_size as f32 / max_edge;
+    let long = width.max(height) as f32;
+    let short = width.min(height) as f32;
+    let min_short_edge = (thumbnail_size / MIN_SHORT_EDGE_DIVISOR).max(1) as f32;
+    let fit_scale = thumbnail_size as f32 / long;
+    let fit_short = short * fit_scale;
+    // Keep the short edge at least min_short_edge, but never upscale it.
+    let scale = if fit_short < min_short_edge {
+        (short.min(min_short_edge)) / short
+    } else {
+        fit_scale
+    };
     let dst_w = ((width as f32) * scale).round().max(1.0) as u32;
     let dst_h = ((height as f32) * scale).round().max(1.0) as u32;
     (dst_w, dst_h)
@@ -546,7 +566,7 @@ pub fn generate_directory_thumbnails(
     let dir_root = Path::new(dir_path);
     let files: Vec<PathBuf> = WalkDir::new(dir_path)
         .into_iter()
-        .filter_entry(|e| !crate::t_utils::is_hidden(e))
+        .filter_entry(crate::t_utils::is_visible_or_root)
         .filter_map(|entry| entry.ok())
         .filter(|entry| entry.file_type().is_file())
         .map(|entry| entry.into_path())
@@ -569,7 +589,7 @@ pub fn generate_directory_thumbnails(
 
             let orientation = get_image_orientation(&path_str);
             let thumb = if file_type == 3 {
-                get_raw_thumbnail(&path_str, orientation, thumbnail_size)
+                get_raw_thumbnail(&path_str, orientation, thumbnail_size, RawDisplayOptions::rendered_bright())
             } else {
                 get_image_thumbnail(&path_str, orientation, thumbnail_size)
             };
@@ -614,7 +634,7 @@ pub fn get_image_thumbnail(
     }
 
     if crate::t_libraw::is_tiff_path(file_path) {
-        if let Ok(Some(data)) = crate::t_libraw::get_raw_thumbnail(file_path, thumbnail_size) {
+        if let Ok(Some(data)) = crate::t_libraw::get_raw_thumbnail(file_path, thumbnail_size, RawDisplayOptions::rendered_bright()) {
             return Ok(Some(data));
         }
     }
@@ -678,154 +698,58 @@ pub fn get_image_thumbnail(
     }
 }
 
-#[derive(Debug)]
-struct EmbeddedJpegCandidate {
-    data: Vec<u8>,
-    width: u32,
-    height: u32,
-    max_edge: u32,
+fn select_embedded_jpeg(
+    file_path: &str,
+    thumbnail_size: Option<u32>,
+) -> Result<Option<crate::t_embedded_jpeg::Preview>, String> {
+    let mut file = File::open(file_path).map_err(|e| e.to_string())?;
+    let mut header = [0; 4];
+    file.read_exact(&mut header).map_err(|e| e.to_string())?;
+    if header == *b"II\x2a\x00" || header == *b"MM\x00\x2a" {
+        // TIFF offsets refer to the file, not the bounded metadata buffer.
+        let exif = crate::t_embedded_jpeg::read_tiff_metadata(&mut file)?;
+        crate::t_embedded_jpeg::select(&mut file, &exif, thumbnail_size)
+    } else {
+        let exif = match read_exif_permissive(file_path) {
+            Some(exif) => exif,
+            None => return Ok(None),
+        };
+        crate::t_embedded_jpeg::select(&mut Cursor::new(exif.buf()), &exif, thumbnail_size)
+    }
 }
 
-fn collect_embedded_jpeg_candidates(file_path: &str) -> Result<Vec<EmbeddedJpegCandidate>, String> {
-    let exif = match read_exif_permissive(file_path) {
-        Some(exif) => exif,
-        None => return Ok(Vec::new()),
-    };
-
-    let buf = exif.buf();
-    let mut candidates: Vec<EmbeddedJpegCandidate> = Vec::new();
-
-    // The parser caps IFD count at 8. Scan all possible IFDs for embedded JPEGs.
-    for ifd_index in 0u16..8u16 {
-        let ifd = In(ifd_index);
-        let offset = exif
-            .get_field(Tag::JPEGInterchangeFormat, ifd)
-            .and_then(|field| field.value.get_uint(0))
-            .map(|value| value as usize);
-        let len = exif
-            .get_field(Tag::JPEGInterchangeFormatLength, ifd)
-            .and_then(|field| field.value.get_uint(0))
-            .map(|value| value as usize);
-
-        let (offset, len) = match (offset, len) {
-            (Some(offset), Some(len)) if len > 4 => (offset, len),
-            _ => continue,
-        };
-
-        let end = offset.saturating_add(len);
-        if end > buf.len() {
-            continue;
-        }
-
-        let candidate = &buf[offset..end];
-        // Basic JPEG signature check to avoid selecting non-JPEG payloads.
-        if !(candidate.starts_with(&[0xFF, 0xD8])) {
-            continue;
-        }
-
-        let data = candidate.to_vec();
-        let (width, height, max_edge) = match image::load_from_memory(&data) {
-            Ok(image) => {
-                let (width, height) = image.dimensions();
-                (width, height, width.max(height))
-            }
-            Err(_) => continue,
-        };
-
-        if max_edge == 0 {
-            continue;
-        }
-
-        candidates.push(EmbeddedJpegCandidate {
-            data,
-            width,
-            height,
-            max_edge,
-        });
-    }
-
-    Ok(candidates)
-}
-
-fn select_embedded_jpeg_for_preview(file_path: &str) -> Result<Option<Vec<u8>>, String> {
-    let candidates = collect_embedded_jpeg_candidates(file_path)?;
-    let (raw_width, raw_height) = t_libraw::get_raw_dimensions(file_path)?;
-    let mut selected: Option<EmbeddedJpegCandidate> = None;
-
-    for candidate in candidates {
-        let width_delta = candidate.width.abs_diff(raw_width);
-        let height_delta = candidate.height.abs_diff(raw_height);
-        let is_fullsize = width_delta.saturating_mul(100) <= raw_width.max(1)
-            && height_delta.saturating_mul(100) <= raw_height.max(1);
-
-        if !is_fullsize {
-            continue;
-        }
-
-        match &selected {
-            Some(best) if candidate.max_edge <= best.max_edge => {}
-            _ => selected = Some(candidate),
-        }
-    }
-
-    Ok(selected.map(|item| item.data))
+fn select_embedded_jpeg_for_preview(
+    file_path: &str,
+) -> Result<Option<crate::t_embedded_jpeg::Preview>, String> {
+    select_embedded_jpeg(file_path, None)
 }
 
 fn select_embedded_jpeg_for_thumbnail(
     file_path: &str,
     thumbnail_size: u32,
+) -> Result<Option<crate::t_embedded_jpeg::Preview>, String> {
+    select_embedded_jpeg(file_path, Some(thumbnail_size))
+}
+
+pub fn get_raw_preview_image(
+    file_path: &str,
+    prefer_embedded_jpeg: RawDisplayOptions,
 ) -> Result<Option<Vec<u8>>, String> {
-    let candidates = collect_embedded_jpeg_candidates(file_path)?;
-    if candidates.is_empty() {
-        return Ok(None);
-    }
-
-    let mut best_not_smaller: Option<EmbeddedJpegCandidate> = None;
-    let mut best_smaller: Option<EmbeddedJpegCandidate> = None;
-
-    for candidate in candidates {
-        if candidate.max_edge >= thumbnail_size {
-            match &best_not_smaller {
-                Some(best) if candidate.max_edge >= best.max_edge => {}
-                _ => best_not_smaller = Some(candidate),
-            }
-        } else {
-            match &best_smaller {
-                Some(best) if candidate.max_edge <= best.max_edge => {}
-                _ => best_smaller = Some(candidate),
-            }
-        }
-    }
-
-    Ok(best_not_smaller.or(best_smaller).map(|item| item.data))
-}
-
-fn get_jpeg_orientation_from_bytes(data: &[u8]) -> i32 {
-    let exif = match read_exif_from_bytes_permissive(data) {
-        Some(exif) => exif,
-        None => return 1,
-    };
-
-    exif.get_field(Tag::Orientation, In::PRIMARY)
-        .and_then(|field| field.value.get_uint(0))
-        .map(|value| value as i32)
-        .unwrap_or(1)
-}
-
-pub fn get_raw_preview_image(file_path: &str) -> Result<Option<Vec<u8>>, String> {
-    // Primary: LibRaw handles extraction and rotation
-    if let Ok(Some(data)) = t_libraw::get_raw_preview_image(file_path) {
+    if let Ok(Some(data)) = t_libraw::get_raw_preview_image(file_path, prefer_embedded_jpeg) {
         return Ok(Some(data));
     }
 
-    // Fallback: EXIF-based embedded JPEG extraction
+    // Final fallback for unsupported RAW renderers or files without a usable
+    // processed output. The selected source still controls the normal path.
     if let Ok(Some(preview)) = select_embedded_jpeg_for_preview(file_path) {
-        let image = image::load_from_memory(&preview)
-            .map_err(|e| format!("Failed to decode embedded RAW preview: {}", e))?;
-        let image = apply_orientation(image, get_jpeg_orientation_from_bytes(&preview));
-        let buf = crate::t_jpeg::encode_rgb8(&image.to_rgb8(), 85)
-            .map_err(|e| format!("Failed to encode embedded RAW preview: {}", e))?;
-        return Ok(Some(buf));
+        // A readable JPEG header does not guarantee a decodable payload.
+        // Preserve the remaining fallbacks if the embedded image is damaged.
+        if let Ok(image) = image::load_from_memory(&preview.data) {
+            let image = apply_orientation(image, preview.orientation);
+            let buf = crate::t_jpeg::encode_rgb8(&image.to_rgb8(), 85)
+                .map_err(|e| format!("Failed to encode embedded RAW preview: {}", e))?;
+            return Ok(Some(buf));
+        }
     }
 
     #[cfg(target_os = "macos")]
@@ -866,9 +790,7 @@ pub fn get_raw_dimensions(file_path: &str) -> Result<(u32, u32), String> {
     }
 
     if let Ok(Some(preview)) = select_embedded_jpeg_for_preview(file_path) {
-        if let Ok(image) = image::load_from_memory(&preview) {
-            return Ok(image.dimensions());
-        }
+        return Ok((preview.width, preview.height));
     }
 
     Err("Failed to resolve RAW dimensions".to_string())
@@ -878,22 +800,21 @@ pub fn get_raw_thumbnail(
     file_path: &str,
     orientation: i32,
     thumbnail_size: u32,
+    prefer_embedded_jpeg: RawDisplayOptions,
 ) -> Result<Option<Vec<u8>>, String> {
-    // Primary: LibRaw handles extraction and rotation
-    if let Ok(Some(data)) = t_libraw::get_raw_thumbnail(file_path, thumbnail_size) {
+    if let Ok(Some(data)) = t_libraw::get_raw_thumbnail(
+        file_path,
+        thumbnail_size,
+        prefer_embedded_jpeg,
+    ) {
         return Ok(Some(data));
     }
 
     // Fallback: EXIF-based embedded JPEG extraction
     if let Ok(Some(preview)) = select_embedded_jpeg_for_thumbnail(file_path, thumbnail_size) {
-        let img = image::load_from_memory(&preview)
-            .map_err(|e| format!("Failed to decode RAW preview image: {}", e))?;
-        return resize_dynamic_image_to_jpeg(
-            img,
-            get_jpeg_orientation_from_bytes(&preview),
-            thumbnail_size,
-        )
-        .map(Some);
+        if let Ok(img) = image::load_from_memory(&preview.data) {
+            return resize_dynamic_image_to_jpeg(img, preview.orientation, thumbnail_size).map(Some);
+        }
     }
 
     #[cfg(target_os = "macos")]
@@ -938,6 +859,8 @@ pub struct EditParams {
     #[serde(rename = "flipVertical")]
     flip_vertical: bool,
     rotate: i32,
+    #[serde(rename = "cropAngle", default)]
+    crop_angle: f32,
     crop: CropData,
     resize: ResizeData,
     quality: Option<u8>,
@@ -1320,11 +1243,11 @@ fn should_generate_preview_for_file(file_path: &str, file_type: i64) -> bool {
         || is_avif_path(file_path)
 }
 
-async fn get_generated_preview_bytes(file_path: &str) -> Result<Option<Vec<u8>>, String> {
+pub(crate) async fn get_generated_preview_bytes(file_path: &str) -> Result<Option<Vec<u8>>, String> {
     let file_type = t_utils::get_file_type(file_path).unwrap_or(0);
 
     if file_type == 3 {
-        return get_raw_preview_image(file_path);
+        return get_raw_preview_image(file_path, RawDisplayOptions::rendered_bright());
     }
 
     if t_jxl::is_jxl_path(file_path) {
@@ -1332,7 +1255,7 @@ async fn get_generated_preview_bytes(file_path: &str) -> Result<Option<Vec<u8>>,
     }
 
     if crate::t_libraw::is_tiff_path(file_path) {
-        return match get_raw_preview_image(file_path) {
+        return match get_raw_preview_image(file_path, RawDisplayOptions::rendered_bright()) {
             Ok(Some(data)) => Ok(Some(data)),
             _ => {
                 #[cfg(target_os = "macos")]
@@ -1421,6 +1344,60 @@ pub async fn copy_edited_image_to_clipboard(params: EditParams) -> bool {
     false
 }
 
+/// Rotate an image by an arbitrary angle (degrees), producing an axis-aligned
+/// bounding-box output with transparent corners, using bilinear interpolation.
+/// Takes `img` by value and uses `into_rgba8` so an already-RGBA source reuses
+/// its buffer instead of allocating a second full-image copy.
+fn rotate_arbitrary(img: DynamicImage, angle_deg: f32) -> DynamicImage {
+    let angle = angle_deg.to_radians();
+    let src = img.into_rgba8();
+    let (sw, sh) = (src.width() as f32, src.height() as f32);
+    let cos = angle.cos().abs();
+    let sin = angle.sin().abs();
+    let bb_w = (sw * cos + sh * sin).ceil() as u32;
+    let bb_h = (sh * cos + sw * sin).ceil() as u32;
+
+    let (dw, dh) = (bb_w as f32, bb_h as f32);
+    let cos_a = angle.cos();
+    let sin_a = angle.sin();
+
+    let mut dst = image::RgbaImage::new(bb_w, bb_h);
+    for (x, y, px) in dst.enumerate_pixels_mut() {
+        let dx = x as f32 - dw / 2.0;
+        let dy = y as f32 - dh / 2.0;
+        // Inverse rotation maps this output pixel back into source space.
+        let sx = dx * cos_a + dy * sin_a + sw / 2.0;
+        let sy = -dx * sin_a + dy * cos_a + sh / 2.0;
+
+        if sx < 0.0 || sy < 0.0 || sx > sw - 1.0 || sy > sh - 1.0 {
+            *px = image::Rgba([0, 0, 0, 0]);
+            continue;
+        }
+
+        let x0 = sx.floor() as u32;
+        let y0 = sy.floor() as u32;
+        let x1 = (x0 + 1).min(src.width() - 1);
+        let y1 = (y0 + 1).min(src.height() - 1);
+        let fx = sx - x0 as f32;
+        let fy = sy - y0 as f32;
+
+        let p00 = src.get_pixel(x0, y0).0;
+        let p10 = src.get_pixel(x1, y0).0;
+        let p01 = src.get_pixel(x0, y1).0;
+        let p11 = src.get_pixel(x1, y1).0;
+
+        let mut out = [0u8; 4];
+        for i in 0..4 {
+            let top = p00[i] as f32 * (1.0 - fx) + p10[i] as f32 * fx;
+            let bottom = p01[i] as f32 * (1.0 - fx) + p11[i] as f32 * fx;
+            out[i] = (top * (1.0 - fy) + bottom * fy).round() as u8;
+        }
+        *px = image::Rgba(out);
+    }
+
+    DynamicImage::ImageRgba8(dst)
+}
+
 /// get an edited image
 async fn get_edited_image(params: &EditParams) -> Result<DynamicImage, String> {
     let file_type = t_utils::get_file_type(&params.source_file_path).unwrap_or(0);
@@ -1448,7 +1425,7 @@ async fn get_edited_image(params: &EditParams) -> Result<DynamicImage, String> {
         img = img.flipv();
     }
 
-    // 2. Rotate
+    // 2. Rotate (90° multiples)
     match params.rotate {
         90 => img = img.rotate90(),
         180 => img = img.rotate180(),
@@ -1457,6 +1434,17 @@ async fn get_edited_image(params: &EditParams) -> Result<DynamicImage, String> {
         -180 => img = img.rotate180(),
         -270 => img = img.rotate90(),
         _ => {}
+    }
+
+    // 2b. Arbitrary-angle rotation (straighten), producing an axis-aligned
+    // bounding box that the subsequent crop indexes into. Offloaded to a
+    // blocking thread: it is a CPU-heavy full-image pass that should not occupy
+    // the async executor (matches the project's spawn_blocking convention).
+    if params.crop_angle != 0.0 {
+        let angle = params.crop_angle;
+        img = tauri::async_runtime::spawn_blocking(move || rotate_arbitrary(img, angle))
+            .await
+            .map_err(|e| format!("Failed to join rotate task: {}", e))?;
     }
 
     // 3. Crop
@@ -1671,6 +1659,7 @@ const FILE_IMAGE_RESULT_CACHE_MAX: usize = 8;
 #[derive(Clone)]
 struct FileImageCacheEntry {
     signature: (u64, u128),
+    prefer_embedded_raw_preview: RawDisplayOptions,
     data: Vec<u8>,
 }
 
@@ -1687,9 +1676,16 @@ impl FileImageResultCache {
         }
     }
 
-    fn get(&mut self, file_path: &str, signature: (u64, u128)) -> Option<Vec<u8>> {
+    fn get(
+        &mut self,
+        file_path: &str,
+        signature: (u64, u128),
+        prefer_embedded_raw_preview: RawDisplayOptions,
+    ) -> Option<Vec<u8>> {
         let entry = self.entries.get(file_path)?;
-        if entry.signature != signature {
+        if entry.signature != signature
+            || entry.prefer_embedded_raw_preview != prefer_embedded_raw_preview
+        {
             self.entries.remove(file_path);
             self.order.retain(|item| item != file_path);
             return None;
@@ -1700,9 +1696,21 @@ impl FileImageResultCache {
         Some(entry.data.clone())
     }
 
-    fn insert(&mut self, file_path: String, signature: (u64, u128), data: Vec<u8>) {
-        self.entries
-            .insert(file_path.clone(), FileImageCacheEntry { signature, data });
+    fn insert(
+        &mut self,
+        file_path: String,
+        signature: (u64, u128),
+        prefer_embedded_raw_preview: RawDisplayOptions,
+        data: Vec<u8>,
+    ) {
+        self.entries.insert(
+            file_path.clone(),
+            FileImageCacheEntry {
+                signature,
+                prefer_embedded_raw_preview,
+                data,
+            },
+        );
         self.order.retain(|item| item != &file_path);
         self.order.push_back(file_path);
 
@@ -1729,7 +1737,10 @@ fn get_file_signature(file_path: &str) -> Result<(u64, u128), String> {
     Ok((metadata.len(), modified))
 }
 
-pub async fn get_file_image_bytes_cached(file_path: &str) -> Result<Vec<u8>, String> {
+pub async fn get_file_image_bytes_cached(
+    file_path: &str,
+    prefer_embedded_raw_preview: RawDisplayOptions,
+) -> Result<Vec<u8>, String> {
     let file_type = t_utils::get_file_type(file_path).unwrap_or(0);
     let cache_signature = if should_generate_preview_for_file(file_path, file_type) {
         Some(get_file_signature(file_path)?)
@@ -1739,14 +1750,14 @@ pub async fn get_file_image_bytes_cached(file_path: &str) -> Result<Vec<u8>, Str
 
     if let Some(signature) = cache_signature {
         if let Ok(mut cache) = FILE_IMAGE_RESULT_CACHE.lock() {
-            if let Some(cached) = cache.get(file_path, signature) {
+            if let Some(cached) = cache.get(file_path, signature, prefer_embedded_raw_preview) {
                 return Ok(cached);
             }
         }
     }
 
     let image_data = if file_type == 3 {
-        get_raw_preview_image(file_path)?
+        get_raw_preview_image(file_path, prefer_embedded_raw_preview)?
             .ok_or_else(|| format!("Failed to resolve RAW preview image: {}", file_path))?
     } else if t_jxl::is_jxl_path(file_path) {
         t_jxl::get_jxl_preview_image(file_path, 4096)?
@@ -1767,7 +1778,7 @@ pub async fn get_file_image_bytes_cached(file_path: &str) -> Result<Vec<u8>, Str
         get_image_thumbnail(file_path, get_image_orientation(file_path), 4096)?
             .ok_or_else(|| format!("Failed to resolve AVIF preview image: {}", file_path))?
     } else if crate::t_libraw::is_tiff_path(file_path) {
-        match get_raw_preview_image(file_path) {
+        match get_raw_preview_image(file_path, RawDisplayOptions::rendered_bright()) {
             Ok(Some(data)) => data,
             _ => tokio::fs::read(file_path)
                 .await
@@ -1781,9 +1792,62 @@ pub async fn get_file_image_bytes_cached(file_path: &str) -> Result<Vec<u8>, Str
 
     if let Some(signature) = cache_signature {
         if let Ok(mut cache) = FILE_IMAGE_RESULT_CACHE.lock() {
-            cache.insert(file_path.to_string(), signature, image_data.clone());
+            cache.insert(
+                file_path.to_string(),
+                signature,
+                prefer_embedded_raw_preview,
+                image_data.clone(),
+            );
         }
     }
 
     Ok(image_data)
+}
+
+fn get_raw_preview_with_source(path: &str, options: RawDisplayOptions) -> Result<RawPreviewResult, String> {
+    if options.embedded() {
+        if let Ok(Some(data)) = t_libraw::get_embedded_raw_preview_image(path) {
+            return Ok((data, "embedded", false));
+        }
+        // Some cameras expose previews that LibRaw cannot extract. Preserve the
+        // existing JPEG extraction fallback, with accurate source metadata.
+        if let Ok(Some(preview)) = select_embedded_jpeg_for_preview(path) {
+            if let Ok(image) = image::load_from_memory(&preview.data) {
+                let image = apply_orientation(image, preview.orientation);
+                let data = crate::t_jpeg::encode_rgb8(&image.to_rgb8(), 85).map_err(|e| e.to_string())?;
+                return Ok((data, "embedded", false));
+            }
+        }
+    }
+    let (data, source, _) = t_libraw::get_raw_preview_with_source(path, RawDisplayOptions {
+        mode: crate::t_raw_display::RawPreviewMode::Rendered,
+        ..options
+    })?;
+    Ok((data, source, options.embedded()))
+}
+
+// Keep decoder work off the async runtime and bound concurrent full RAW previews.
+type RawPreviewResult = (Vec<u8>, &'static str, bool);
+static RAW_PREVIEW_CACHE: Lazy<Mutex<VecDeque<(String, (u64, u128), RawDisplayOptions, RawPreviewResult)>>> = Lazy::new(|| Mutex::new(VecDeque::new()));
+static RAW_PREVIEW_PERMITS: Lazy<std::sync::Arc<tokio::sync::Semaphore>> = Lazy::new(|| std::sync::Arc::new(tokio::sync::Semaphore::new(2)));
+
+pub async fn get_raw_preview_cached(path: &str, options: RawDisplayOptions) -> Result<RawPreviewResult, String> {
+    let permit = RAW_PREVIEW_PERMITS.clone().acquire_owned().await.map_err(|e| e.to_string())?;
+    let path = path.to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _permit = permit;
+        let signature = get_file_signature(&path)?;
+        if let Ok(cache) = RAW_PREVIEW_CACHE.lock() {
+            if let Some(entry) = cache.iter().find(|entry| entry.0 == path && entry.1 == signature && entry.2 == options) {
+                return Ok(entry.3.clone());
+            }
+        }
+        let result = get_raw_preview_with_source(&path, options)?;
+        if let Ok(mut cache) = RAW_PREVIEW_CACHE.lock() {
+            cache.retain(|entry| entry.0 != path || (entry.1 == signature && entry.2 != options));
+            cache.push_back((path, signature, options, result.clone()));
+            while cache.len() > 4 { cache.pop_front(); }
+        }
+        Ok(result)
+    }).await.map_err(|e| e.to_string())?
 }

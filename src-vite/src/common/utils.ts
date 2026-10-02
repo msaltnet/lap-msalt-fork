@@ -2,6 +2,7 @@ import { format } from 'date-fns';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { useUIStore } from '@/stores/uiStore';
+import { appendRawDisplayParams, rawDisplayKey } from './rawDisplay';
 
 /// get the current operating system (mac, win, linux, or '')
 export function getOS() {
@@ -391,7 +392,7 @@ const thumbnailDataUrlInflight = new Map<string, Promise<string>>();
 let thumbnailDataUrlCacheBytes = 0;
 
 function getThumbnailCacheKey(fileId: number, thumbnailSize = 0): string {
-  return `${_thumbLibraryId}:${thumbnailSize}:${fileId}`;
+  return `${_thumbLibraryId}:${thumbnailSize}:${fileId}:${rawDisplayKey()}`;
 }
 
 function estimateDataUrlBytes(dataUrl: string): number {
@@ -500,6 +501,8 @@ export function getThumbUrl(
   const scheme = isWin ? 'http://thumb.localhost' : 'thumb://localhost';
   const base = `${scheme}/${_thumbLibraryId}/${fileId}`;
   const params = new URLSearchParams();
+  appendRawDisplayParams(params);
+  if (thumbnailSize > 0) params.set('size', String(thumbnailSize));
   if (fileVersion > 0) params.set('v', String(fileVersion));
   if (bustCache) params.set('t', String(Date.now()));
   const query = params.toString();
@@ -511,13 +514,21 @@ export function getPreviewUrl(
   filePath?: string | null,
   bustCache = false,
   fileVersion = 0,
+  forEditing = false,
 ): string {
   if (!fileId || fileId <= 0) return '';
   const scheme = isWin ? 'http://preview.localhost' : 'preview://localhost';
   const base = `${scheme}/${_thumbLibraryId}/${fileId}`;
 
   const params = new URLSearchParams();
+  if (forEditing) {
+    // Editing uses the same decoder pipeline as export, independently of browsing.
+    params.set('forEditing', 'true');
+  } else {
+    appendRawDisplayParams(params);
+  }
   if (fileVersion > 0) params.set('v', String(fileVersion));
+
   if (filePath) {
     const uiStore = useUIStore();
     const localVersion = uiStore.getFileVersion(filePath);

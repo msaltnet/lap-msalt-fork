@@ -9,14 +9,10 @@
   </p>
 </div>
 
-[English](../README.md) | [Deutsch](README.de.md) | Français | [Español](README.es.md) | [Português](README.pt.md) | [Русский](README.ru.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md) | [한국어](README.ko.md)
+[English](../README.md) | [Deutsch](README.de.md) | [Español](README.es.md) | Français | [Italiano](README.it.md) | [Magyar](README.hu.md) | [Nederlands](README.nl.md) | [Polski](README.pl.md) | [Português](README.pt.md) | [Русский](README.ru.md) | [Українська](README.uk.md) | [中文简体](README.zh-CN.md) | [中文繁體](README.zh-TW.md) | [日本語](README.ja.md) | [한국어](README.ko.md)
 
 Lap est un gestionnaire de photos open source et local-first conçu pour parcourir les albums familiaux, retrouver rapidement d'anciennes photos et gérer de grandes bibliothèques multimédias personnelles hors ligne.
 C'est une alternative respectueuse de la vie privée aux services de photos en ligne : pas de téléchargement forcé, recherche IA locale, flux de travail centré sur les dossiers, et gratuit à utiliser.
-
-- Site web : [https://julyx10.github.io/lap/](https://julyx10.github.io/lap/)
-- Vidéo de démonstration : [https://youtu.be/RbKqNKhbVUs](https://youtu.be/RbKqNKhbVUs)
-- Confidentialité : [PRIVACY.md](../PRIVACY.md)
 
 ## Télécharger Lap
 
@@ -26,7 +22,8 @@ Ouvrez la [page des dernières versions](https://github.com/julyx10/lap/releases
 | :-- | :-- | :-- |
 | **macOS (Apple Silicon / Intel)** | `_aarch64.dmg` / `_x64.dmg` | Notarié par Apple |
 | **Windows 10/11 (x64 / ARM64)** | `_x64_en-US.msi` / `_arm64_en-US.msi` | Non signé — si SmartScreen bloque le téléchargement, cliquez sur **Conserver quand même** |
-| **Linux (amd64 / arm64)** | `_amd64.deb` / `_arm64.deb` | Pour les distributions basées sur Debian (Ubuntu, Debian, Linux Mint, etc.) |
+| **Linux (x64 / ARM64)** | `_amd64.deb` / `_arm64.deb` | Pour les distributions basées sur Debian (Ubuntu, Debian, Linux Mint, etc.) |
+| **Linux (x64 / ARM64)** | `_amd64.AppImage` / `_aarch64.AppImage` | Rendez le fichier exécutable, puis double-cliquez pour le lancer |
 
 ### macOS avec Homebrew
 
@@ -38,7 +35,8 @@ brew install --cask lap
 ## Captures d'écran
 
 <p align="center">
-  <img src="../docs/public/screenshots/Lap_0.3.0_main_1.png" alt="Capture d'écran du gestionnaire de photos locales Lap" width="900">
+  <img src="../docs/public/screenshots/lap_library.png" alt="Gestionnaire de photothèque locale Lap" width="900">
+  <img src="../docs/public/screenshots/lap_map_view.png" alt="Vue carte de Lap" width="900">
 </p>
 
 ## Pourquoi Lap
@@ -51,17 +49,22 @@ brew install --cask lap
 
 ## Fonctionnalités
 
-- **Navigation flexible dans la bibliothèque** avec filtres par chronologie, dossier, lieu, appareil photo, objectif, tag, favori, note, sujet et visage.
-- **Albums intelligents** pour enregistrer des vues basées sur des règles, avec regroupement, tri et ordre personnalisés.
-- **Collections** : organisez vos fichiers dans des collections flexibles, sans déplacer ni dupliquer les originaux.
-- **Recherche IA locale** pour les requêtes texte, la similarité visuelle, les sujets, le regroupement de visages et la recherche multilingue optionnelle dans plus de 50 langues.
-- **Live Photos Apple** reconnaît les paires HEIC/MOV, les lit dans la visionneuse et conserve les fichiers associés MOV et AAE lors du renommage, du déplacement, de la copie et de la suppression.
-- **Paires RAW + JPEG/HEIC** regroupent facultativement un fichier RAW et son fichier JPEG ou HEIC compagnon portant le même nom dans le même dossier en un seul élément. Les originaux restent des fichiers distincts ; le renommage, le déplacement, la copie, le collage et la suppression traitent les deux fichiers ensemble.
-- **Flux de travail centré sur les dossiers** avec plusieurs bibliothèques, import par glisser-déposer, import par copier-coller, synchronisation du système de fichiers et opérations sûres de déplacement/copie/suppression.
-- **Outils de sélection et de comparaison**, dont une visionneuse de comparaison d'images à quatre volets.
-- **Outils de nettoyage** pour trouver les doublons et déplacer par lots les fichiers indésirables vers la corbeille.
-- **Édition intégrée** pour recadrer, faire pivoter, retourner, redimensionner et appliquer des ajustements d'image de base.
-- **Large prise en charge des formats** pour plus de 60 formats photo, RAW et vidéo.
+- **Navigation flexible** par date, dossier, lieu, appareil, objectif, tags, notes et visages, avec tri aléatoire et filtre des petites images.
+- **Carte interactive** pour explorer les photos et vidéos géolocalisées, regroupées selon les filtres actifs.
+- **Albums intelligents** pour enregistrer des vues basées sur des règles, avec regroupement et tri personnalisés.
+- **Collections et tags** pour organiser les fichiers sélectionnés par lot sans déplacer ni dupliquer les originaux.
+- **Recherche par IA locale** par texte, similarité visuelle, sujets et regroupement de visages, avec recherche multilingue optionnelle dans plus de 50 langues.
+- **Apple Live Photos et Google Motion Photos** avec lecture animée et filtre commun dans les albums intelligents.
+- **Paires RAW + JPEG/HEIC** affichées comme un seul élément, dont les fichiers liés restent ensemble lors des opérations.
+- **Miniatures et aperçus RAW configurables** à partir du rendu RAW ou de l’aperçu intégré de l’appareil.
+- **Organisation par dossiers** avec plusieurs bibliothèques, import par glisser-déposer ou copier-coller, synchronisation et opérations de fichiers sécurisées.
+- **Import organisé par date** dans des dossiers par jour, mois, année ou un dossier unique, en conservant les noms d’origine et en ignorant les doublons.
+- **Outils de sélection et de comparaison** avec une visionneuse à quatre volets.
+- **Nettoyage des doublons** avec estimation de l’espace récupérable et suppression par lot dans plusieurs groupes.
+- **Affichage personnalisable** avec miniatures jusqu’à 1024 px, taille de grille et coins réglables, aperçu rapide ou fenêtres séparées.
+- **Intégration au bureau** avec plusieurs applications externes et choix du fond d’écran sur macOS, Windows et GNOME Linux.
+- **Édition intégrée** pour recadrer, pivoter, retourner, redimensionner et effectuer des ajustements de base.
+- **Large compatibilité** avec plus de 60 formats photo, RAW et vidéo.
 
 ## Métadonnées, collections et déplacement de fichiers
 
@@ -130,11 +133,13 @@ Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$env:APPDATA\com.july
 
 ### Linux
 
-Pour les distributions basées sur Debian, désinstallez le paquet :
+Pour une installation DEB, désinstallez le paquet :
 
 ```bash
 sudo apt remove lap
 ```
+
+Pour une installation AppImage, quittez Lap et supprimez le fichier `.AppImage` téléchargé.
 
 Supprimez ensuite tous les fichiers de base de données, de cache et de configuration de Lap :
 
@@ -170,6 +175,8 @@ cd src-vite && pnpm install && cd ..
 cargo tauri dev
 ```
 
+Les paquets de distribution peuvent utiliser le libheif système (1.17 ou plus récent) au lieu du libheif et du libde265 intégrés. Définissez `LAP_SYSTEM_LIBHEIF=1` pour la compilation. Les sous-modules `third_party/libheif` et `third_party/libde265` ne sont alors pas nécessaires. Le décodage HEVC dépend des plugins de codec du libheif système.
+
 ## Formats supportés
 
 Lap prend en charge plus de 60 formats photo, RAW et vidéo.
@@ -180,9 +187,9 @@ Lap prend en charge plus de 60 formats photo, RAW et vidéo.
 | Photos RAW | CR2, CR3, CRW, NEF, NRW, ARW, SRF, SR2, RAF, RW2, ORF, PEF, DNG, SRW, RWL, MRW, 3FR, MOS, DCR, KDC, ERF, MEF, RAW, MDC |
 | Vidéos | MP4, MOV, M4V, MKV, AVI, FLV, TS/M2TS, WMV, WebM, 3GP/3G2, F4V, VOB, MPG/MPEG, ASF, DIVX et plus. La lecture H.264 est supportée sur toutes les plateformes, avec un traitement automatique de compatibilité lorsque la lecture native n'est pas disponible. HEVC/H.265 et VP9 sont supportés nativement sur macOS. |
 
-### Note sur la lecture vidéo sous Linux
+### Lecture vidéo sous Linux
 
-Sur Linux Mint/Ubuntu/Debian, installez ces paquets pour un meilleur support de la lecture vidéo :
+Lap utilise les plugins GStreamer du système pour la lecture vidéo, y compris dans l’AppImage. Si les vidéos ne se lisent pas sous Ubuntu, Debian ou Linux Mint, installez :
 
 ```bash
 sudo apt install gstreamer1.0-libav gstreamer1.0-plugins-good
@@ -212,3 +219,7 @@ sudo apt install gstreamer1.0-libav gstreamer1.0-plugins-good
 ## Licence
 
 GPL-3.0-or-later. Voir [LICENSE](../LICENSE).
+
+## Confidentialité
+
+Consultez la [Politique de confidentialité](../PRIVACY.md) pour en savoir plus sur le traitement des données et les services en ligne optionnels.

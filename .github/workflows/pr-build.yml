@@ -28,6 +28,11 @@ concurrency:
   group: pr-build-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+env:
+  # Pin the Tauri CLI so bundled-linuxdeploy/GTK-hook changes in a floating
+  # `@tauri-apps/cli@v2` cannot silently break packaging. Bump deliberately.
+  TAURI_CLI_VERSION: '2.12.0'
+
 jobs:
   build-macos:
     if: |
@@ -122,6 +127,9 @@ jobs:
         shell: bash
         run: rm -rf "src-tauri/target/${{ matrix.target }}/release/bundle"
 
+      - name: Install pinned Tauri CLI
+        run: npm install -g @tauri-apps/cli@${{ env.TAURI_CLI_VERSION }}
+
       - name: Build and Sign
         uses: tauri-apps/tauri-action@v0.5
         env:
@@ -135,6 +143,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           projectPath: .
+          tauriScript: tauri
           args: --target ${{ matrix.target }} --verbose --bundles dmg --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
       - name: Notarize and Staple
@@ -204,10 +213,14 @@ jobs:
             runner: windows-2022
             target: x86_64-pc-windows-msvc
             msvc_arch: x64
+            msvc_vsversion: "2022"
           - arch: arm64
             runner: windows-11-arm
             target: aarch64-pc-windows-msvc
             msvc_arch: arm64
+            # The windows-11-arm image now ships VS 2026; leave vsversion empty so
+            # vswhere auto-discovers whatever MSVC the runner provides.
+            msvc_vsversion: ""
 
     steps:
       - name: Checkout repository
@@ -286,7 +299,7 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: ${{ matrix.msvc_arch }}
-          vsversion: "2022"
+          vsversion: ${{ matrix.msvc_vsversion }}
 
       - name: Remove ranlib from PATH
         shell: pwsh
@@ -309,6 +322,9 @@ jobs:
         shell: pwsh
         run: .\scripts\download_ffmpeg_sidecar.ps1 -Arch ${{ matrix.arch }}
 
+      - name: Install pinned Tauri CLI
+        run: npm install -g @tauri-apps/cli@${{ env.TAURI_CLI_VERSION }}
+
       - name: Build and Sign (Windows ${{ matrix.arch }})
         uses: tauri-apps/tauri-action@v0.5
         env:
@@ -318,6 +334,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: .
+          tauriScript: tauri
           args: --verbose --target ${{ matrix.target }} --bundles msi --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
       - name: Rename Windows package for PR build
@@ -373,7 +390,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libjpeg-turbo8-dev
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libjpeg-turbo8-dev zsync
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -442,6 +459,9 @@ jobs:
         shell: bash
         run: rm -rf src-tauri/target/${{ matrix.target }}/release/bundle
 
+      - name: Install pinned Tauri CLI
+        run: npm install -g @tauri-apps/cli@${{ env.TAURI_CLI_VERSION }}
+
       - name: Build and Sign
         uses: tauri-apps/tauri-action@v0.5
         env:
@@ -451,6 +471,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: .
+          tauriScript: tauri
           args: --verbose --target ${{ matrix.target }} --bundles deb,appimage --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
       - name: Rename Linux package for PR build
@@ -466,6 +487,15 @@ jobs:
             mv "$file" "$dir/${filename}-${SUFFIX}.${ext}"
           done
 
+      - name: Strip bundled Wayland client and add update info
+        shell: bash
+        env:
+          UPDATE_INFO: "zsync|https://github.com/${{ github.repository }}/releases/download/pr-build/{name}.zsync"
+          ZSYNC_URL: "https://github.com/${{ github.repository }}/releases/download/pr-build/{name}"
+        run: >
+          bash scripts/remove_appimage_wayland_client.sh
+          src-tauri/target/${{ matrix.target }}/release/bundle/appimage
+
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -473,6 +503,7 @@ jobs:
           path: |
             src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
             src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
+            src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage.zsync
           if-no-files-found: error
 
   publish-pr-build:
@@ -511,9 +542,22 @@ jobs:
               --prerelease
           fi
 
+          # Remove only the stale assets whose file type was rebuilt in THIS run,
+          # so a partial run (e.g. macOS only) keeps the other platforms' files.
+          # Extensions are platform-unique (dmg | msi/sig | deb/AppImage/zsync),
+          # so matching the produced extensions scopes the cleanup per platform.
+          mapfile -t rebuilt_exts < <(find release-files -type f | sed -E 's/.*(\.[A-Za-z0-9]+)$/\1/' | sort -u)
+
           gh release view "$TAG" -R "$GH_REPO" --json assets --jq '.assets[].name' | while IFS= read -r asset; do
             [ -n "$asset" ] || continue
-            gh release delete-asset "$TAG" "$asset" -R "$GH_REPO" -y
+            ext=".${asset##*.}"
+            for e in "${rebuilt_exts[@]}"; do
+              if [ "${ext,,}" = "${e,,}" ]; then
+                echo "Deleting stale asset for a rebuilt platform: $asset"
+                gh release delete-asset "$TAG" "$asset" -R "$GH_REPO" -y
+                break
+              fi
+            done
           done
 
-          find release-files -type f | xargs gh release upload "$TAG" -R "$GH_REPO" --clobber
+          find release-files -type f -print0 | xargs -0 -r gh release upload "$TAG" -R "$GH_REPO" --clobber

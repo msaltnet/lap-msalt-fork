@@ -33,11 +33,12 @@
         :class="{
           'bg-base-content/5 cursor-default scale-80': d.count === 0 && isWeekend(d.date),
           'bg-base-content/10 cursor-default scale-80': d.count === 0 && !isWeekend(d.date),
-          'text-base-content/70 hover:text-base-content cursor-pointer': d.count > 0,
-          'bg-base-content/20': d.count > 0 && d.count < 10,
-          'bg-base-content/50': d.count >= 10 && d.count < 100,
-          'bg-base-content/80 text-[10px]': d.count >= 100,
-          'bg-primary/70 text-primary-content/70 hover:text-primary-content/70 selected-item': isSelected(year, month, d.date),
+          'text-base-100/70 hover:text-base-100 hover:bg-base-content/80 hover:scale-110 transition-all cursor-pointer': d.count > 0,
+          'bg-base-content/30': heatLevel(d.count) === 1,
+          'bg-base-content/40': heatLevel(d.count) === 2,
+          'bg-base-content/50': heatLevel(d.count) === 3,
+          'bg-base-content/60 text-[10px]': heatLevel(d.count) === 4 && !isSelected(year, month, d.date),
+          'text-base-100! bg-primary hover:bg-primary scale-110': isSelected(year, month, d.date),
           'border border-base-content/20': isTodayFn(d.date),
         }"
         @click="d.count > 0 ? clickDate(year, month, d.date): null"
@@ -78,6 +79,10 @@ const props = defineProps({
     type: Array as PropType<DateItem[]>,
     required: true,
   },
+  heatmapThresholds: {
+    type: Array as PropType<number[] | null>,
+    default: null,
+  },
 });
 
 /// i18n
@@ -103,6 +108,22 @@ const isWeekend = (date: number) => {
   const weekday = getDay(new Date(props.year, props.month - 1, date));
   return weekday === 0 || weekday === 6;
 };
+
+function heatLevel(count: number) {
+  if (count === 0) return 0;
+
+  const thresholds = props.heatmapThresholds;
+  if (thresholds) {
+    if (count < thresholds[0]) return 1;
+    if (count < thresholds[1]) return 2;
+    if (count < thresholds[2]) return 3;
+    return 4;
+  }
+
+  if (count < 10) return 1;
+  if (count < 100) return 2;
+  return 4;
+}
 
 // Check if the date is selected
 const isSelected = (year: number, month: number, date: number) => libConfig.calendar.year === year &&

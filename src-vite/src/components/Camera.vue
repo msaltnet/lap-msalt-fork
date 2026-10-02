@@ -2,22 +2,20 @@
 
   <div class="sidebar-panel">
     <div class="sidebar-panel-header">
-      <span class="sidebar-panel-header-title flex-1">
-        {{ cameraTitle }}<template v-if="activeItems.length > 0"> ({{ activeItems.length.toLocaleString() }})</template>
-      </span>
-      <label
-        class="swap swap-flip inline-grid w-6 h-6 place-items-center text-base-content/70 hover:text-base-content"
-        :title="config.settings.showToolTip ? cameraToggleTooltip : undefined"
-        :aria-label="cameraToggleTooltip"
-      >
-        <input
-          type="checkbox"
-          :checked="activeTab === 'lens'"
-          @change="toggleCameraTab"
-        />
-        <IconCamera class="swap-off col-start-1 row-start-1 self-center justify-self-center w-4 h-4" />
-        <IconCameraAperture class="swap-on col-start-1 row-start-1 self-center justify-self-center w-4 h-4" />
-      </label>
+      <div class="sidebar-header-tabs" role="tablist" :aria-label="props.titlebar">
+        <button
+          v-for="tab in cameraTabs"
+          :key="tab.value"
+          type="button"
+          role="tab"
+          class="sidebar-header-tab"
+          :class="{ 'tab-active': activeTab === tab.value }"
+          :aria-selected="activeTab === tab.value"
+          @click="setActiveTab(tab.value)"
+        >
+          {{ tab.label }} ({{ tab.count.toLocaleString() }})
+        </button>
+      </div>
     </div>
 
     <div v-if="activeItems.length > 0" class="flex-1 overflow-x-hidden overflow-y-auto">
@@ -60,7 +58,7 @@
     </div>
 
     <!-- Display message if no data are found -->
-    <div v-else class="mt-2 px-2 flex flex-col items-center justify-center text-base-content/30">
+    <div v-else-if="!isLoadingCameraInfo" class="mt-2 px-2 flex flex-col items-center justify-center text-base-content/30">
       <!-- <IconCamera class="w-8 h-8 mb-2" /> -->
       <span class="text-sm text-center">{{ $t('tooltip.not_found.camera_hint') }}</span>
     </div>
@@ -71,10 +69,12 @@
 
 <script setup lang="ts">
 
-import { ref, onMounted, computed, watch } from 'vue';
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { fileInfoRevision } from '@/common/fileInfoRefresh';
 import { config, libConfig } from '@/common/config';
 import { getCameraInfo, getLensInfo } from '@/common/api';
+import { SIDEBAR } from '@/common/constants';
 import { IconCamera, IconCameraAperture, IconRight } from '@/common/icons';
 
 const props = defineProps({
@@ -86,19 +86,16 @@ const props = defineProps({
 
 const { locale, messages } = useI18n();
 const localeMsg = computed(() => messages.value[locale.value] as any);
-const cameraTitle = computed(() =>
-  config.camera.isCamera
-    ? localeMsg.value.menu.camera_panel?.camera_title
-    : localeMsg.value.menu.camera_panel?.lens_title
-);
-const cameraToggleTooltip = computed(() =>
-  config.camera.isCamera
-    ? localeMsg.value.menu.camera_panel?.switch_to_lens
-    : localeMsg.value.menu.camera_panel?.switch_to_camera
-);
-
 const cameras = ref<any[]>([]);
 const lenses = ref<any[]>([]);
+const isLoadingCameraInfo = ref(true);
+let isCameraMounted = true;
+let cameraRequestVersion = 0;
+
+onUnmounted(() => {
+  isCameraMounted = false;
+  cameraRequestVersion++;
+});
 
 const activeTab = computed(() => {
   return config.camera.isCamera ? 'camera' : 'lens';
@@ -108,21 +105,67 @@ const activeItems = computed(() => {
   return activeTab.value === 'lens' ? lenses.value : cameras.value;
 });
 
+const cameraTabs = computed(() => [
+  {
+    value: 'camera' as const,
+    label: localeMsg.value.menu.camera_panel?.camera_title || 'Cameras',
+    count: cameras.value.length,
+  },
+  {
+    value: 'lens' as const,
+    label: localeMsg.value.menu.camera_panel?.lens_title || 'Lenses',
+    count: lenses.value.length,
+  },
+]);
+
 const sortedItems = computed(() => activeItems.value);
 
 onMounted(async () => {
-  if (cameras.value.length === 0 || lenses.value.length === 0) {
-    await Promise.all([getCameras(), getLenses()]);
-  }
-
-  validateSelections();
+  await loadCameraInfo();
   expandSelectedItem(cameras.value, (libConfig.camera as any).make, (libConfig.camera as any).model);
   expandSelectedItem(lenses.value, (libConfig.camera as any).lensMake, (libConfig.camera as any).lensModel);
 });
 
-watch(() => config.settings.categorySort, async () => {
-  await Promise.all([getCameras(), getLenses()]);
+// Keep the current filter even if its last file moves out of this category.
+watch(fileInfoRevision, async () => {
+  if (libConfig.activePane === 'main' && config.main.sidebarIndex === SIDEBAR.CAMERA) await loadCameraInfo(true);
 });
+
+// Only refresh the active view. Inactive panel data is refreshed on re-entry.
+watch(() => [config.settings.categorySort], async () => {
+  if (libConfig.activePane === 'main' && config.main.sidebarIndex === SIDEBAR.CAMERA) await loadCameraInfo();
+});
+
+watch(() => [config.main.sidebarIndex, libConfig.activePane], async () => {
+  if (libConfig.activePane === 'main' && config.main.sidebarIndex === SIDEBAR.CAMERA) await loadCameraInfo();
+});
+
+async function loadCameraInfo(preserveFilter = false) {
+  const requestVersion = ++cameraRequestVersion;
+  const libraryId = libConfig._libraryId;
+  isLoadingCameraInfo.value = true;
+  try {
+    const [fetchedCameras, fetchedLenses] = await Promise.all([
+      getCameraInfo(config.settings.categorySort),
+      getLensInfo(config.settings.categorySort),
+    ]);
+    if (!isCameraMounted || requestVersion !== cameraRequestVersion || libraryId !== libConfig._libraryId) return;
+
+    if (fetchedCameras) {
+      cameras.value = fetchedCameras.map((camera: any) => ({ ...camera, is_expanded: false }));
+      restoreExpandedItem(cameras.value, (libConfig.camera as any).make, (libConfig.camera as any).model);
+    }
+    if (fetchedLenses) {
+      lenses.value = fetchedLenses.map((lens: any) => ({ ...lens, is_expanded: false }));
+      restoreExpandedItem(lenses.value, (libConfig.camera as any).lensMake, (libConfig.camera as any).lensModel);
+    }
+    if (!preserveFilter) validateSelections();
+  } finally {
+    if (isCameraMounted && requestVersion === cameraRequestVersion) {
+      isLoadingCameraInfo.value = false;
+    }
+  }
+}
 
 function restoreExpandedItem(items: any[], selectedMake: string | null, selectedModel: string | null) {
   if (!selectedMake) return;
@@ -143,10 +186,6 @@ function restoreExpandedItem(items: any[], selectedMake: string | null, selected
 
 function setActiveTab(tab: 'camera' | 'lens') {
   config.camera.isCamera = tab === 'camera';
-}
-
-function toggleCameraTab() {
-  setActiveTab(activeTab.value === 'lens' ? 'camera' : 'lens');
 }
 
 function isMakeSelected(make: string) {
@@ -185,29 +224,6 @@ function clickModel(make: string, model: string) {
   } else {
     (libConfig.camera as any).make = make;
     (libConfig.camera as any).model = model;
-  }
-}
-
-/// get cameras from db
-async function getCameras() {
-  const fetchedCameras = await getCameraInfo(config.settings.categorySort);
-  if (fetchedCameras) {
-    cameras.value = fetchedCameras.map((camera: any) => ({
-      ...camera, 
-      is_expanded: false,
-    }));
-    restoreExpandedItem(cameras.value, (libConfig.camera as any).make, (libConfig.camera as any).model);
-  }
-}
-
-async function getLenses() {
-  const fetchedLenses = await getLensInfo(config.settings.categorySort);
-  if (fetchedLenses) {
-    lenses.value = fetchedLenses.map((lens: any) => ({
-      ...lens,
-      is_expanded: false,
-    }));
-    restoreExpandedItem(lenses.value, (libConfig.camera as any).lensMake, (libConfig.camera as any).lensModel);
   }
 }
 

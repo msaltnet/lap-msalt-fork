@@ -6,15 +6,15 @@ hero:
   text: "Local-first, AI-powered Photo manager."
   tagline: "Built for family albums, photographers, and large local libraries."
   image:
-    src: /screenshots/lap-home-0.1.10_1.png
+    src: /screenshots/lap_library.png
     alt: Lap local photo library manager screenshot
   actions:
     - theme: brand
       text: Download
       link: https://github.com/julyx10/lap/releases/latest
     - theme: alt
-      text: What's New in v0.3.0
-      link: /guide/release-notes/v0.3.0
+      text: What's New in v0.3.2
+      link: /guide/release-notes/v0.3.2
     - theme: alt
       text: View on GitHub
       link: https://github.com/julyx10/lap
@@ -27,7 +27,7 @@ features:
     details: Browsing, indexing, and search run locally on your device so your family albums stay under your control.
     icon: 🔒
   - title: Folder-First Workflow
-    details: Use your existing folders directly. No import lock-in, no proprietary library migration.
+    details: Use existing folders directly, or import photos into date-based folders with original filenames and duplicate skipping.
     icon: 📂
   - title: Local AI Search
     details: Find photos with text search, similar-image search, face clustering, and smart tags processed on-device.
@@ -38,6 +38,15 @@ features:
   - title: Free to Use
     details: No subscription plan or recurring fee. Install and manage your memories freely.
     icon: 💸
+  - title: Interactive Map View
+    details: Explore geotagged photos and videos on a map, grouped by location and filtered with your current view.
+    icon: 🗺️
+  - title: Live and Motion Photos
+    details: Play Apple Live Photos and supported Google Motion Photos alongside your photos and videos.
+    icon: ▶️
+  - title: Review and Organize
+    details: Compare photos, organize collections and tags, and clean up duplicate sets in bulk.
+    icon: 🖼️
 ---
 
 <script setup>
@@ -408,7 +417,7 @@ onBeforeUnmount(() => {
   .VPHero .image-container::before {
     top: 9%;
     left: -7%;
-    background-image: url('/screenshots/lap-home-0.1.10_2.png');
+    background-image: url('/screenshots/lap_map_view.png');
     transform:
       rotateX(calc(10deg + var(--hero-tilt-y) * -2deg))
       rotateY(calc(22deg + var(--hero-tilt-x) * 4deg))

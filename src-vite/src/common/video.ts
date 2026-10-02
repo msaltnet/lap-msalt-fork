@@ -12,6 +12,17 @@ export function isWebViewVideoPlaybackDisabled(filePath: string): boolean {
   return ['mpg', 'mpeg', 'vob'].includes(extension);
 }
 
+// Share one probe across hover previews. Await it before loading video (#313);
+// unknown failures preserve playback, while confirmed missing elements disable it.
+let gstreamerAvailability: Promise<boolean> | null = null;
+
+export function getGStreamerAvailability(): Promise<boolean> {
+  if (!gstreamerAvailability) {
+    gstreamerAvailability = invoke<boolean>('check_gstreamer_available').catch(() => true);
+  }
+  return gstreamerAvailability;
+}
+
 export async function prepareVideo(
   filePath: string,
   playerId: string = 'default',

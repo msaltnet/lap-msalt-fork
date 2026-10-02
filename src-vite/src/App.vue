@@ -14,6 +14,7 @@ import { emit } from '@tauri-apps/api/event';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { useConfigStore } from '@/stores/configStore';
 import { useLibraryStore } from '@/stores/libraryStore';
+import { useUIStore } from '@/stores/uiStore';
 import { clearIndexRecoveryInfo } from '@/common/api';
 import { isMac, setTheme, SCALE_VALUES } from '@/common/utils';
 import { matchesShortcut } from '@/common/shortcuts';
@@ -140,6 +141,11 @@ const handleKeyDown = (event) => {
     emit('app-open-preferences');
     return;
   }
+
+  // Inputs that handle their own keys must not trigger global shortcuts (Enter is file.rename on
+  // macOS). SearchBox/MoveTo/ImportOrganize are deliberately excluded — they rely on this channel.
+  const uiStore = useUIStore();
+  if (uiStore.isInputActive('MessageBox') || uiStore.isInputActive('FileInfo-rename')) return;
 
   emit('global-keydown', {
     key: event.key,

@@ -9,14 +9,10 @@
   </p>
 </div>
 
-[English](../README.md) | Deutsch | [Français](README.fr.md) | [Español](README.es.md) | [Português](README.pt.md) | [Русский](README.ru.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md) | [한국어](README.ko.md) 
+[English](../README.md) | Deutsch | [Español](README.es.md) | [Français](README.fr.md) | [Italiano](README.it.md) | [Magyar](README.hu.md) | [Nederlands](README.nl.md) | [Polski](README.pl.md) | [Português](README.pt.md) | [Русский](README.ru.md) | [Українська](README.uk.md) | [中文简体](README.zh-CN.md) | [中文繁體](README.zh-TW.md) | [日本語](README.ja.md) | [한국어](README.ko.md)
 
 Lap ist ein quelloffener, lokal orientierter Fotomanager zum Durchsuchen von Familienalben, zum schnellen Finden alter Fotos und zum Offline-Verwalten großer persönlichen Medienbibliotheken.
 Es ist eine datenschutzorientierte Alternative zu Cloud-Fotodiensten: kein erzwungener Upload, lokale KI-Suche, ordnerorientierter Workflow und kostenlos nutzbar.
-
-- Website: [https://julyx10.github.io/lap/](https://julyx10.github.io/lap/)
-- Demo-Video: [https://youtu.be/RbKqNKhbVUs](https://youtu.be/RbKqNKhbVUs)
-- Datenschutz: [PRIVACY.md](../PRIVACY.md)
 
 ## Lap herunterladen
 
@@ -26,7 +22,8 @@ Es ist eine datenschutzorientierte Alternative zu Cloud-Fotodiensten: kein erzwu
 | :-- | :-- | :-- |
 | **macOS (Apple Silicon / Intel)** | `_aarch64.dmg` / `_x64.dmg` | Von Apple notarisiert |
 | **Windows 10/11 (x64 / ARM64)** | `_x64_en-US.msi` / `_arm64_en-US.msi` | Nicht signiert — falls SmartScreen den Download blockiert, klicken Sie auf **Trotzdem behalten** |
-| **Linux (amd64 / arm64)** | `_amd64.deb` / `_arm64.deb` | Für Debian-basierte Distributionen (Ubuntu, Debian, Linux Mint, etc.) |
+| **Linux (x64 / ARM64)** | `_amd64.deb` / `_arm64.deb` | Für Debian-basierte Distributionen (Ubuntu, Debian, Linux Mint, etc.) |
+| **Linux (x64 / ARM64)** | `_amd64.AppImage` / `_aarch64.AppImage` | Datei ausführbar machen und per Doppelklick starten |
 
 ### macOS mit Homebrew
 
@@ -38,7 +35,8 @@ brew install --cask lap
 ## Screenshots
 
 <p align="center">
-  <img src="../docs/public/screenshots/Lap_0.3.0_main_1.png" alt="Screenshot des lokalen Fotobibliotheksmanagers Lap" width="900">
+  <img src="../docs/public/screenshots/lap_library.png" alt="Lokaler Fotobibliotheksmanager Lap" width="900">
+  <img src="../docs/public/screenshots/lap_map_view.png" alt="Kartenansicht von Lap" width="900">
 </p>
 
 ## Warum Lap
@@ -51,16 +49,21 @@ brew install --cask lap
 
 ## Funktionen
 
-- **Flexibles Durchsuchen der Bibliothek** mit Timeline-, Ordner-, Standort-, Kamera-, Objektiv-, Tag-, Favoriten-, Bewertungs-, Motiv- und Gesichtsfiltern.
-- **Smart-Alben** speichern regelbasierte Ansichten mit eigener Gruppierung, Sortierung und Reihenfolge.
-- **Sammlungen**: Organisieren Sie Dateien in flexiblen Sammlungen, ohne die Originale zu verschieben oder zu duplizieren.
-- **Lokale KI-Suche** für Textanfragen, visuelle Ähnlichkeit, Motive, Gesichts-Clustering und optionale mehrsprachige Suche in über 50 Sprachen.
-- **Apple Live Photos** erkennt gekoppelte HEIC/MOV-Live-Photos, spielt sie im Viewer ab und hält verknüpfte MOV- und AAE-Seitendateien beim Umbenennen, Verschieben, Kopieren und Löschen zusammen.
-- **RAW- + JPEG/HEIC-Paare** gruppieren optional eine RAW-Datei und die gleichnamige JPEG- oder HEIC-Begleitdatei im selben Ordner als ein Element. Die Originale bleiben getrennte Dateien; beim Umbenennen, Verschieben, Kopieren, Einfügen und Löschen werden beide Dateien zusammen behandelt.
-- **Ordnerorientierter Workflow** mit mehreren Bibliotheken, Drag-and-drop-Import, Kopieren-und-Einfügen-Import, Dateisystem-Synchronisierung und sicheren Verschiebe-/Kopier-/Löschvorgängen.
-- **Auswahl- und Vergleichswerkzeuge** einschließlich eines Vierfach-Bildvergleichs im Viewer.
-- **Aufräumwerkzeuge** zum Finden von Duplikaten und zum stapelweisen Verschieben unerwünschter Dateien in den Papierkorb.
-- **Integrierte Bearbeitung** für Zuschneiden, Drehen, Spiegeln, Größenänderung und grundlegende Bildanpassungen.
+- **Flexible Bibliotheksansichten** nach Datum, Ordner, Ort, Kamera, Objektiv, Tags, Bewertungen und Gesichtern, mit zufälliger Sortierung und Filter für kleine Bilder.
+- **Interaktive Kartenansicht** für Fotos und Videos mit Standortdaten, gruppiert nach den aktuellen Filtern.
+- **Intelligente Alben** speichern regelbasierte Ansichten mit eigener Gruppierung und Sortierung.
+- **Sammlungen und Tags** zum gemeinsamen Organisieren ausgewählter Dateien, ohne Originale zu verschieben oder zu kopieren.
+- **Lokale KI-Suche** mit Textanfragen, visueller Ähnlichkeit, Motiven, Gesichtsgruppierung und optionaler Suche in über 50 Sprachen.
+- **Apple Live Photos und Google Motion Photos** mit Bewegungswiedergabe und gemeinsamem Filter für intelligente Alben.
+- **RAW + JPEG/HEIC-Paare** als ein Eintrag, dessen zugehörige Dateien bei Dateiaktionen zusammenbleiben.
+- **Wählbare RAW-Miniaturen und Vorschauen** aus RAW-Rendering oder eingebetteter Kameravorschau.
+- **Ordnerbasierter Workflow** mit mehreren Bibliotheken, Import per Drag-and-drop oder Zwischenablage, Dateisystemsynchronisierung und sicheren Dateiaktionen.
+- **Import nach Datum** in Tages-, Monats-, Jahres- oder einzelne Ordner, mit ursprünglichen Dateinamen und Überspringen von Duplikaten.
+- **Auswahl- und Vergleichswerkzeuge** mit einem Bildvergleich in vier Bereichen.
+- **Duplikatbereinigung** mit Übersicht des freigebbaren Speicherplatzes und gruppenübergreifendem Löschen.
+- **Anpassbare Anzeige** mit Miniaturen bis 1024 px, einstellbarer Rastergröße und Ecken sowie Schnellvorschau oder separaten Anzeigefenstern.
+- **Desktop-Integration** mit mehreren externen Apps und Hintergrundbildauswahl unter macOS, Windows und GNOME Linux.
+- **Integrierte Bearbeitung** zum Zuschneiden, Drehen, Spiegeln, Skalieren und für grundlegende Bildanpassungen.
 - **Breite Formatunterstützung** für über 60 Foto-, RAW- und Videoformate.
 
 ## Metadaten, Sammlungen und das Verschieben von Dateien
@@ -130,11 +133,13 @@ Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$env:APPDATA\com.july
 
 ### Linux
 
-Deinstallieren Sie das Paket auf Debian-basierten Distributionen:
+Bei einer DEB-Installation deinstallieren Sie das Paket:
 
 ```bash
 sudo apt remove lap
 ```
+
+Bei einer AppImage-Installation beenden Sie Lap und löschen die heruntergeladene `.AppImage`-Datei.
 
 Entfernen Sie anschließend alle Datenbank-, Cache- und Konfigurationsdateien von Lap:
 
@@ -170,6 +175,8 @@ cd src-vite && pnpm install && cd ..
 cargo tauri dev
 ```
 
+Distributionspakete können das System-libheif (1.17 oder neuer) anstelle des gebündelten libheif und libde265 verwenden. Setze `LAP_SYSTEM_LIBHEIF=1` für den Build. Die Submodule `third_party/libheif` und `third_party/libde265` werden dann nicht benötigt. Die HEVC-Dekodierung hängt von den Codec-Plugins des System-libheif ab.
+
 ## Unterstützte Formate
 
 Lap unterstützt über 60 Foto-, RAW- und Videoformate.
@@ -180,9 +187,9 @@ Lap unterstützt über 60 Foto-, RAW- und Videoformate.
 | RAW-Fotos | CR2, CR3, CRW, NEF, NRW, ARW, SRF, SR2, RAF, RW2, ORF, PEF, DNG, SRW, RWL, MRW, 3FR, MOS, DCR, KDC, ERF, MEF, RAW, MDC |
 | Videos | MP4, MOV, M4V, MKV, AVI, FLV, TS/M2TS, WMV, WebM, 3GP/3G2, F4V, VOB, MPG/MPEG, ASF, DIVX und weitere. Die H.264-Wiedergabe wird auf allen Plattformen unterstützt, mit automatischer Kompatibilitätsverarbeitung, wenn die native Wiedergabe nicht verfügbar ist. HEVC/H.265 und VP9 werden nativ auf macOS unterstützt. |
 
-### Linux Video-Wiedergabe Hinweise
+### Videowiedergabe unter Linux
 
-Installieren Sie unter Linux Mint/Ubuntu/Debian diese Pakete für eine bessere Unterstützung der Videowiedergabe:
+Lap verwendet die GStreamer-Plugins des Systems für die Videowiedergabe, auch im AppImage. Falls Videos unter Ubuntu, Debian oder Linux Mint nicht abgespielt werden, installieren Sie:
 
 ```bash
 sudo apt install gstreamer1.0-libav gstreamer1.0-plugins-good
@@ -212,3 +219,7 @@ sudo apt install gstreamer1.0-libav gstreamer1.0-plugins-good
 ## Lizenz
 
 GPL-3.0-oder-später. Siehe [LICENSE](../LICENSE).
+
+## Datenschutz
+
+Details zum Umgang mit Daten und zu optionalen Onlinediensten finden Sie in der [Datenschutzerklärung](../PRIVACY.md).

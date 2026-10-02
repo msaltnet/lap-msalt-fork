@@ -9,14 +9,10 @@
   </p>
 </div>
 
-[English](../README.md) | [Deutsch](README.de.md) | [Français](README.fr.md) | [Español](README.es.md) | Português | [Русский](README.ru.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md) | [한국어](README.ko.md)
+[English](../README.md) | [Deutsch](README.de.md) | [Español](README.es.md) | [Français](README.fr.md) | [Italiano](README.it.md) | [Magyar](README.hu.md) | [Nederlands](README.nl.md) | [Polski](README.pl.md) | Português | [Русский](README.ru.md) | [Українська](README.uk.md) | [中文简体](README.zh-CN.md) | [中文繁體](README.zh-TW.md) | [日本語](README.ja.md) | [한국어](README.ko.md)
 
 Lap é um gerenciador de fotos de código aberto e local-first, projetado para navegar em álbuns de família, encontrar fotos antigas rapidamente e gerenciar grandes bibliotecas de mídia pessoal offline.
 É uma alternativa focada na privacidade aos serviços de fotos na nuvem: sem upload forçado, busca por IA local, fluxo de trabalho centrado em pastas e gratuito para usar.
-
-- Site: [https://julyx10.github.io/lap/](https://julyx10.github.io/lap/)
-- Vídeo de demonstração: [https://youtu.be/RbKqNKhbVUs](https://youtu.be/RbKqNKhbVUs)
-- Privacidade: [PRIVACY.md](../PRIVACY.md)
 
 ## Baixar Lap
 
@@ -26,7 +22,8 @@ Abra a [página de lançamentos recentes](https://github.com/julyx10/lap/release
 | :-- | :-- | :-- |
 | **macOS (Apple Silicon / Intel)** | `_aarch64.dmg` / `_x64.dmg` | Notarizado pela Apple |
 | **Windows 10/11 (x64 / ARM64)** | `_x64_en-US.msi` / `_arm64_en-US.msi` | Não assinado — se o SmartScreen bloquear o download, clique em **Manter mesmo assim** |
-| **Linux (amd64 / arm64)** | `_amd64.deb` / `_arm64.deb` | Para distribuições baseadas em Debian (Ubuntu, Debian, Linux Mint, etc.) |
+| **Linux (x64 / ARM64)** | `_amd64.deb` / `_arm64.deb` | Para distribuições baseadas em Debian (Ubuntu, Debian, Linux Mint, etc.) |
+| **Linux (x64 / ARM64)** | `_amd64.AppImage` / `_aarch64.AppImage` | Torne o arquivo executável e clique duas vezes para iniciar |
 
 ### macOS com Homebrew
 
@@ -38,7 +35,8 @@ brew install --cask lap
 ## Capturas de tela
 
 <p align="center">
-  <img src="../docs/public/screenshots/Lap_0.3.0_main_1.png" alt="Captura de tela do gerenciador de biblioteca de fotos local Lap" width="900">
+  <img src="../docs/public/screenshots/lap_library.png" alt="Gerenciador local de biblioteca de fotos Lap" width="900">
+  <img src="../docs/public/screenshots/lap_map_view.png" alt="Visualização de mapa do Lap" width="900">
 </p>
 
 ## Por que Lap
@@ -51,17 +49,22 @@ brew install --cask lap
 
 ## Recursos
 
-- **Navegação flexível na biblioteca** com filtros por linha do tempo, pasta, local, câmera, lente, tag, favorito, classificação, assunto e rosto.
-- **Álbuns inteligentes** salvam visualizações baseadas em regras com agrupamento, ordenação e ordem personalizados.
-- **Coleções**: organize arquivos em coleções flexíveis sem mover ou duplicar os originais.
-- **Busca local com IA** para comandos de texto, similaridade visual, assuntos, agrupamento de rostos e busca multilíngue opcional em mais de 50 idiomas.
-- **Live Photos da Apple** reconhece pares HEIC/MOV, reproduz no visualizador e mantém arquivos auxiliares MOV e AAE juntos ao renomear, mover, copiar e excluir.
-- **Pares RAW + JPEG/HEIC** agrupam opcionalmente um arquivo RAW e seu arquivo JPEG ou HEIC correspondente com o mesmo nome na mesma pasta como um único item. Os originais permanecem arquivos separados; as operações de renomear, mover, copiar, colar e excluir tratam os dois juntos.
-- **Fluxo de trabalho baseado em pastas** com várias bibliotecas, importação por arrastar e soltar, importação por copiar e colar, sincronização do sistema de arquivos e operações seguras de mover/copiar/excluir.
-- **Ferramentas de seleção e comparação**, incluindo um visualizador de comparação de imagens em quatro painéis.
-- **Ferramentas de limpeza** para encontrar duplicados e mover arquivos indesejados para a lixeira em lote.
-- **Edição integrada** para cortar, girar, inverter, redimensionar e aplicar ajustes básicos de imagem.
-- **Amplo suporte a formatos** para mais de 60 formatos de foto, RAW e vídeo.
+- **Navegação flexível** por data, pasta, local, câmera, lente, tags, avaliações e rostos, com ordem aleatória e filtro de imagens pequenas.
+- **Mapa interativo** para explorar fotos e vídeos geolocalizados em grupos que seguem os filtros atuais.
+- **Álbuns inteligentes** para salvar visualizações baseadas em regras com agrupamento e ordenação personalizados.
+- **Coleções e tags** para organizar arquivos selecionados em lote sem mover ou duplicar os originais.
+- **Busca com IA local** por texto, similaridade visual, temas e agrupamento de rostos, com busca opcional em mais de 50 idiomas.
+- **Apple Live Photos e Google Motion Photos** com reprodução do movimento e um filtro comum nos álbuns inteligentes.
+- **Pares RAW + JPEG/HEIC** exibidos como um único item, mantendo os arquivos associados juntos durante as operações.
+- **Miniaturas e prévias RAW configuráveis** usando renderização RAW ou a prévia incorporada da câmera.
+- **Fluxo baseado em pastas** com várias bibliotecas, importação por arrastar e soltar ou copiar e colar, sincronização e operações seguras com arquivos.
+- **Importação organizada por data** em pastas por dia, mês, ano ou uma única pasta, preservando os nomes originais e ignorando duplicatas.
+- **Ferramentas de seleção e comparação** com um visualizador de imagens de quatro painéis.
+- **Limpeza de duplicatas** com resumo do espaço recuperável e remoção em lote entre grupos.
+- **Visualização personalizável** com miniaturas de até 1024 px, tamanho da grade e cantos ajustáveis, além de prévia rápida ou janelas separadas.
+- **Integração com o desktop** com vários aplicativos externos e seleção de papel de parede no macOS, Windows e GNOME Linux.
+- **Edição integrada** para cortar, girar, inverter, redimensionar e fazer ajustes básicos.
+- **Amplo suporte a formatos** para mais de 60 formatos de fotos, RAW e vídeo.
 
 ## Metadados, coleções e movimentação de arquivos
 
@@ -130,11 +133,13 @@ Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$env:APPDATA\com.july
 
 ### Linux
 
-Em distribuições baseadas em Debian, desinstale o pacote:
+Para instalações DEB, desinstale o pacote:
 
 ```bash
 sudo apt remove lap
 ```
+
+Para instalações AppImage, feche o Lap e exclua o arquivo `.AppImage` baixado.
 
 Depois remova todos os arquivos de banco de dados, cache e configuração do Lap:
 
@@ -170,6 +175,8 @@ cd src-vite && pnpm install && cd ..
 cargo tauri dev
 ```
 
+Os pacotes de distribuição podem vincular ao libheif do sistema (1.17 ou mais recente) em vez do libheif e libde265 incluídos. Defina `LAP_SYSTEM_LIBHEIF=1` para a compilação. Os submódulos `third_party/libheif` e `third_party/libde265` então não são necessários. A decodificação HEVC depende dos plugins de codec do libheif do sistema.
+
 ## Formatos Suportados
 
 O Lap suporta mais de 60 formatos de foto, RAW e vídeo.
@@ -180,9 +187,9 @@ O Lap suporta mais de 60 formatos de foto, RAW e vídeo.
 | Fotos RAW | CR2, CR3, CRW, NEF, NRW, ARW, SRF, SR2, RAF, RW2, ORF, PEF, DNG, SRW, RWL, MRW, 3FR, MOS, DCR, KDC, ERF, MEF, RAW, MDC |
 | Vídeos | MP4, MOV, M4V, MKV, AVI, FLV, TS/M2TS, WMV, WebM, 3GP/3G2, F4V, VOB, MPG/MPEG, ASF, DIVX e mais. A reprodução H.264 é suportada em todas as plataformas, com processamento de compatibilidade automático quando a reprodução nativa não estiver disponível. HEVC/H.265 e VP9 são suportados nativamente no macOS. |
 
-### Notas sobre reprodução de vídeo no Linux
+### Reprodução de vídeo no Linux
 
-No Linux Mint/Ubuntu/Debian, instale estes pacotes para melhor suporte à reprodução de vídeo:
+O Lap usa os plugins GStreamer do sistema para reproduzir vídeos, inclusive no AppImage. Se os vídeos não forem reproduzidos no Ubuntu, Debian ou Linux Mint, instale:
 
 ```bash
 sudo apt install gstreamer1.0-libav gstreamer1.0-plugins-good
@@ -212,3 +219,7 @@ sudo apt install gstreamer1.0-libav gstreamer1.0-plugins-good
 ## Licença
 
 GPL-3.0-ou-posterior. Veja [LICENSE](../LICENSE).
+
+## Privacidade
+
+Consulte a [Política de Privacidade](../PRIVACY.md) para saber mais sobre o tratamento de dados e os serviços online opcionais.
