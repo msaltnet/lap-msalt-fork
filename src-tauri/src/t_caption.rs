@@ -110,10 +110,30 @@ fn normalize_caption(raw: &str) -> Result<String, String> {
     Ok(value)
 }
 
+fn language_name(code: &str) -> &'static str {
+    match code.trim().to_ascii_lowercase().as_str() {
+        "de" => "German",
+        "es" => "Spanish",
+        "fr" => "French",
+        "hu" => "Hungarian",
+        "it" => "Italian",
+        "ja" => "Japanese",
+        "ko" => "Korean",
+        "nl" => "Dutch",
+        "pl" => "Polish",
+        "pt" => "Portuguese",
+        "ru" => "Russian",
+        "uk" => "Ukrainian",
+        "zh-cn" | "zh" => "Chinese (Simplified)",
+        "zh-tw" => "Chinese (Traditional)",
+        _ => "English",
+    }
+}
+
 fn build_caption_request(model: &str, language: &str, image_url: &str) -> Value {
     let prompt = format!(
         "Describe only what is visibly present in this photo in exactly one concise sentence. \
-         Do not speculate and do not use an introductory phrase. Respond in {language} when supported; otherwise respond in English."
+         Do not speculate and do not use an introductory phrase. Respond in {language}."
     );
     json!({
         "model": model,
@@ -215,7 +235,7 @@ pub async fn generate(
     let mime = image_mime(image_data)?;
     let encoded = base64::engine::general_purpose::STANDARD.encode(image_data);
     let image_url = format!("data:{mime};base64,{encoded}");
-    let caption = request_caption(endpoint, model, language, &image_url).await?;
+    let caption = request_caption(endpoint, model, language_name(language), &image_url).await?;
 
     Ok(AiCaption {
         file_id,
@@ -422,6 +442,17 @@ mod tests {
         );
         assert!(normalize_caption("   ").is_err());
         assert!(normalize_caption(&"x".repeat(MAX_CAPTION_CHARS + 1)).is_err());
+    }
+
+    #[test]
+    fn maps_locale_codes_to_language_names() {
+        assert_eq!(language_name("ko"), "Korean");
+        assert_eq!(language_name("ja"), "Japanese");
+        assert_eq!(language_name("zh-CN"), "Chinese (Simplified)");
+        assert_eq!(language_name("zh-TW"), "Chinese (Traditional)");
+        assert_eq!(language_name("pt"), "Portuguese");
+        assert_eq!(language_name(""), "English");
+        assert_eq!(language_name("xx-unknown"), "English");
     }
 
     #[test]
