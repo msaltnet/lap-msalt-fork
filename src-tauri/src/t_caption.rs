@@ -16,15 +16,26 @@ pub fn literal_search_condition(search_term: &str) -> Option<(String, Vec<String
         return None;
     }
 
-    let condition = "(a.name LIKE ? COLLATE NOCASE
-        OR a.comments LIKE ? COLLATE NOCASE
+    let condition = "(a.name LIKE (? COLLATE NOCASE) ESCAPE '\\'
+        OR a.comments LIKE (? COLLATE NOCASE) ESCAPE '\\'
         OR EXISTS (
             SELECT 1 FROM ai_captions ac
-            WHERE ac.file_id = a.id AND ac.caption LIKE ? COLLATE NOCASE
+            WHERE ac.file_id = a.id AND ac.caption LIKE (? COLLATE NOCASE) ESCAPE '\\'
         ))"
     .to_string();
-    let pattern = format!("%{search_term}%");
+    let pattern = format!("%{}%", escape_like_literal(search_term));
     Some((condition, vec![pattern; 3]))
+}
+
+fn escape_like_literal(term: &str) -> String {
+    let mut escaped = String::with_capacity(term.len());
+    for character in term.chars() {
+        if matches!(character, '\\' | '%' | '_') {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    escaped
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -464,6 +475,37 @@ mod tests {
             body["messages"][0]["content"][1]["image_url"]["url"],
             "data:image/jpeg;base64,YWJj"
         );
+    }
+
+    #[test]
+    fn literal_search_treats_wildcards_as_literal_text() {
+        let conn = fixture();
+        for (id, name) in [
+            (9, "report_100%.txt"),
+            (10, "report_100X.txt"),
+            (11, "notes_100_.md"),
+        ] {
+            conn.execute(
+                "INSERT INTO afiles(id, name) VALUES (?1, ?2)",
+                rusqlite::params![id, name],
+            )
+            .unwrap();
+        }
+
+        let search = |term: &str| -> Vec<i64> {
+            let (condition, values) = literal_search_condition(term).unwrap();
+            let query = format!("SELECT a.id FROM afiles a WHERE {condition} ORDER BY a.id");
+            conn.prepare(&query)
+                .unwrap()
+                .query_map(rusqlite::params_from_iter(values), |row| row.get(0))
+                .unwrap()
+                .map(|row| row.unwrap())
+                .collect()
+        };
+
+        // "%" and "_" match literally instead of acting as wildcards.
+        assert_eq!(search("100%"), vec![9]);
+        assert_eq!(search("100_"), vec![11]);
     }
 
     #[test]
