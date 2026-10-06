@@ -11,6 +11,12 @@ export async function confirmCaptionBatchStart(files, confirmLargeBatch) {
   return Boolean(await confirmLargeBatch(count));
 }
 
+// A caption is stale when the source file changed after the caption was
+// generated. Mirrors the outdated check shown in the file info panel.
+export const isCaptionStale = (caption, file) =>
+  caption?.sourceModifiedAt != null
+  && Number(caption.sourceModifiedAt) !== Number(file?.modified_at || 0);
+
 export async function runCaptionBatch({
   files,
   isCancelled,

@@ -776,6 +776,7 @@ import { useFileMenuItems } from '@/common/fileMenu';
 import {
   confirmCaptionBatchStart,
   eligibleCaptionFiles,
+  isCaptionStale,
   runCaptionBatch,
 } from '@/common/captionBatch';
 import Welcome from '@/components/Welcome.vue';
@@ -6661,7 +6662,7 @@ async function startCaptionBatch() {
       process: async (file: any) => {
         const fileId = Number(file.id);
         const existing = await getAiCaption(fileId);
-        if (existing) return null;
+        if (existing && !isCaptionStale(existing, file)) return null;
 
         const caption = await generateAiCaption(fileId, settings, requestedLanguage);
         await tauriEmit('ai-caption-updated', { fileId, caption });
