@@ -700,6 +700,8 @@
       "open_video_in_app": "在 {app} 中打开视频...",
       "open_selected_images_in_app": "在 {app} 中打开照片...",
       "compare_selected_images": "对比",
+      "generate_ai_caption": "生成 AI 图片描述",
+      "generate_ai_captions": "批量生成 AI 图片描述",
       "open_selected_videos_in_app": "在 {app} 中打开视频...",
       "open_in_app": "在外部应用中打开...",
       "manage_app": "管理应用...",
@@ -786,6 +788,18 @@
     "reset": "重置",
     "cancel": "取消",
     "close": "关闭",
+    "caption_batch": {
+      "title": "批量生成 AI 图片描述",
+      "progress": "{current}/{total}",
+      "succeeded": "已生成",
+      "skipped": "已跳过",
+      "failed": "失败",
+      "cancel": "取消",
+      "cancelling": "将在当前照片处理完成后取消...",
+      "close": "关闭",
+      "completed": "已生成 {succeeded} 个，跳过 {skipped} 个，失败 {failed} 个。",
+      "cancelled": "已取消：生成 {succeeded} 个，跳过 {skipped} 个，失败 {failed} 个。"
+    },
     "unsaved_changes": {
       "title": "未保存的更改",
       "message": "您有未保存的更改。确定要保存这些更改吗？"
@@ -1174,7 +1188,20 @@
     "geo_location": "地点",
     "tags": "标签",
     "comment": "备注",
-    "capture_settings": "拍摄设置"
+    "capture_settings": "拍摄设置",
+    "ai_caption": {
+      "title": "AI 图片描述",
+      "generate": "生成",
+      "regenerate": "重新生成",
+      "delete": "删除",
+      "generating": "正在生成...",
+      "empty": "尚未生成 AI 图片描述。",
+      "outdated": "生成此描述后，原始文件已发生更改。",
+      "outdated_badge": "已过期",
+      "generated": "AI 图片描述已生成。",
+      "deleted": "AI 图片描述已删除。",
+      "metadata": "{model} · 请求语言 {language} · {time}"
+    }
   },
   "map": {
     "show_map": "显示地图",
@@ -1650,6 +1677,17 @@
       "restore_restoring": "正在恢复...",
       "restore_success": "恢复完成。已恢复 {count} 个资料库：{names}",
       "restore_note": "名称冲突的资料库将被重命名，现有数据不会被覆盖。"
+    },
+    "ai_caption": {
+      "title": "AI 图片描述",
+      "enable": "启用本地 AI 图片描述",
+      "enable_hint": "使用在此电脑上运行的视觉模型生成图片描述。",
+      "endpoint": "本地 API 端点",
+      "model": "视觉模型",
+      "privacy_hint": "仅接受 localhost 和环回地址。Lap 不会安装或启动模型。",
+      "test_connection": "测试连接",
+      "testing": "正在测试...",
+      "connection_success": "已连接到本地 AI 图片描述模型。"
     },
     "face_recognition": {
       "title": "人物搜索",

@@ -4639,11 +4639,13 @@ impl AFile {
             vec![Self::live_photo_companion_exclusion_condition().to_string()];
         let mut sql_params: Vec<Box<dyn ToSql>> = Vec::new();
 
-        if !params.search_file_name.is_empty() {
-            conditions.push("(a.name LIKE ? COLLATE NOCASE OR a.comments LIKE ? COLLATE NOCASE)".to_string());
-            let pattern = format!("%{}%", params.search_file_name);
-            sql_params.push(Box::new(pattern.clone()));
-            sql_params.push(Box::new(pattern));
+        if let Some((condition, values)) =
+            crate::t_caption::literal_search_condition(&params.search_file_name)
+        {
+            conditions.push(condition);
+            for value in values {
+                sql_params.push(Box::new(value));
+            }
         }
 
         if let Some(condition) = Self::build_file_type_condition(params.search_file_type) {
@@ -7808,6 +7810,37 @@ impl AThumb {
             known_duration,
             seek_percent,
         )
+    }
+
+    pub fn get_or_create_caption_bytes(file: &AFile) -> Result<Vec<u8>, String> {
+        let file_id = file.id.ok_or_else(|| "File ID is missing".to_string())?;
+        let file_path = file
+            .file_path
+            .as_deref()
+            .ok_or_else(|| "File path is missing".to_string())?;
+        let file_type = file.file_type.unwrap_or(0);
+        let orientation = file.e_orientation.unwrap_or(1) as i32;
+        let thumb = Self::get_or_create_thumb(
+            file_id,
+            file_path,
+            file_type,
+            orientation,
+            512,
+            RawDisplayOptions::default(),
+            false,
+            None,
+            None,
+        )?
+        .ok_or_else(|| "Could not create a caption thumbnail".to_string())?;
+
+        match thumb.error_code {
+            0 => thumb
+                .thumb_data
+                .ok_or_else(|| "Could not read the caption thumbnail".to_string()),
+            2 => t_image::get_image_thumbnail(file_path, orientation, 512)?
+                .ok_or_else(|| "Could not create a caption thumbnail".to_string()),
+            _ => Err("Could not create a caption thumbnail".to_string()),
+        }
     }
 
     /// fetch raw thumbnail bytes for protocol handler

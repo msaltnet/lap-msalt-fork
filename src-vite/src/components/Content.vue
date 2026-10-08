@@ -641,6 +641,14 @@
     @cancel="showAddToCollectionDialog = false"
   />
 
+  <CaptionBatchDialog
+    v-if="showCaptionBatchDialog"
+    :progress="captionBatchProgress"
+    :cancelling="captionBatchCancelling"
+    @cancel="cancelCaptionBatch"
+    @close="closeCaptionBatchDialog"
+  />
+
   <!-- comment -->
   <MessageBox
     v-if="showCommentMsgbox"
@@ -758,7 +766,7 @@ import { getAlbum, getAllAlbums, recountAlbum, getQueryCountAndSum, getQueryTime
          revealPath, getTagName, indexAlbum, listenIndexProgress, listenIndexFinished, setAlbumCover, setDesktopWallpaper,
          updateFileInfo, getSupportedFormatExtensions, importFile, importUrl, importFileBytes, getDragPayload, importClipboard, addFileToDb, checkFileExists, checkFileAccessibility, cancelIndexing as cancelIndexingApi, selectFolder, getFacesForFile, listenFaceIndexProgress,
          openFilesWithApp, getAppConfig, getIndexRecoveryInfo, clearIndexRecoveryInfo, setLastSelectedItemIndex,
-         dedupDelete, getQueryFilePosition, getFolderSearchExcluded,
+         dedupDelete, getQueryFilePosition, getFolderSearchExcluded, getAiCaption, generateAiCaption,
          listCollections, createCollection, addFilesToCollection, removeFilesFromCollection, getFileCollections, getCollectionCountAndSum, getCollectionFiles, getCollectionGroupedQueryRows, getCollectionGroupFileIds, getCollectionQueryFileIds, fetchFolder, isDirectoryAccessible, checkAlbumAccessibility, addTagToFile } from '@/common/api';
 import { config, libConfig } from '@/common/config';
 import {
@@ -788,6 +796,12 @@ import ContextMenu from '@/components/ContextMenu.vue';
 import { MAX_NATIVE_DRAG_FILES, createDragPreview, isWindowDragEdge, isNativeFileDragActive, isReturningNativeFileDrag, startNativeFileDrag } from '@/common/nativeDrag';
 import { isOriginalUnavailable, setFileAccessibility, setFolderAccessibility, requiresOriginalAction } from '@/common/availability';
 import { useFileMenuItems } from '@/common/fileMenu';
+import {
+  confirmCaptionBatchStart,
+  eligibleCaptionFiles,
+  isCaptionStale,
+  runCaptionBatch,
+} from '@/common/captionBatch';
 import Welcome from '@/components/Welcome.vue';
 import MediaViewer from '@/components/MediaViewer.vue';
 import MessageBox from '@/components/MessageBox.vue';
@@ -800,6 +814,7 @@ import TButton from '@/components/TButton.vue';
 import TaggingDialog from '@/components/TaggingDialog.vue';
 import AddToCollectionDialog from '@/components/AddToCollectionDialog.vue';
 import ExternalAppsDialog from '@/components/ExternalAppsDialog.vue';
+import CaptionBatchDialog from '@/components/CaptionBatchDialog.vue';
 import FileInfo from '@/components/FileInfo.vue';
 import Breadcrumb from '@/components/Breadcrumb.vue';
 import DedupPane from '@/components/DedupPane.vue';
@@ -1100,6 +1115,9 @@ const getMediaKind = (items: any[]): 'image' | 'video' | 'mixed' | 'empty' => {
   return 'empty';
 };
 const selectionMediaKind = computed(() => getMediaKind(selectedFiles.value));
+const selectionHasImages = computed(() => (
+  selectedFiles.value.some(file => [1, 3].includes(Number(file?.file_type)))
+));
 type ImageViewerSession =
   | { mode: 'normal' }
   | { mode: 'compare'; files: any[] };
@@ -1183,6 +1201,7 @@ const selectionMenuItems = useFileMenuItems(
     selectionMediaKind,
     selectionCount: selectedCount,
     selectionHasUnavailable,
+    selectionHasImages,
   },
 );
 
@@ -2065,6 +2084,27 @@ const isTrashDeleting = ref(false);
 const showTrashFailedMsgbox = ref(false);
 const showExternalOpenWarningMsgbox = ref(false);
 const showExternalAppsDialog = ref(false);
+type CaptionBatchProgress = {
+  total: number;
+  current: number;
+  succeeded: number;
+  skipped: number;
+  failed: number;
+  cancelled: boolean;
+};
+const emptyCaptionBatchProgress = (): CaptionBatchProgress => ({
+  total: 0,
+  current: 0,
+  succeeded: 0,
+  skipped: 0,
+  failed: 0,
+  cancelled: false,
+});
+const showCaptionBatchDialog = ref(false);
+const captionBatchProgress = ref<CaptionBatchProgress>(emptyCaptionBatchProgress());
+const captionBatchCancelling = ref(false);
+const captionBatchRunning = ref(false);
+let captionBatchCancelRequested = false;
 const pendingExternalOpen = ref<{ paths: string[]; appPath: string } | null>(null);
 const permanentDeleteChecked = ref(false);
 const deletePermanently = ref(false);
@@ -4284,6 +4324,7 @@ function handleItemAction(payload: { action: string, index: number }) {
       });
     },
     'create-montage': () => void openMontage(),
+    'generate-ai-captions': () => void startCaptionBatch(),
     'copy': () => void clickCopyImages(fileList.value[selectedItemIndex.value]),
     'rename': clickRename,
     'move-within-library': () => showMoveTo.value = true,
@@ -6932,6 +6973,78 @@ async function getActionableSelectedItemsForAction() {
     return null;
   }
   return getActionableSelectedItems();
+}
+
+async function startCaptionBatch() {
+  if (captionBatchRunning.value || showCaptionBatchDialog.value) return;
+
+  const sourceFiles = selectMode.value
+    ? await getActionableSelectedItemsForAction()
+    : [fileList.value[selectedItemIndex.value]];
+  if (!sourceFiles) return;
+
+  const files = eligibleCaptionFiles(sourceFiles);
+  if (files.length === 0 || !config.settings.aiCaption?.enabled) return;
+  if (!await confirmCaptionBatchStart(files, confirmLargeBatch)) return;
+
+  const settings = { ...config.settings.aiCaption };
+  const requestedLanguage = String(locale.value || 'en');
+  captionBatchCancelRequested = false;
+  captionBatchCancelling.value = false;
+  captionBatchRunning.value = true;
+  captionBatchProgress.value = {
+    ...emptyCaptionBatchProgress(),
+    total: files.length,
+  };
+  showCaptionBatchDialog.value = true;
+
+  try {
+    const result = await runCaptionBatch({
+      files,
+      isCancelled: () => captionBatchCancelRequested,
+      process: async (file: any) => {
+        const fileId = Number(file.id);
+        const existing = await getAiCaption(fileId);
+        if (existing && !isCaptionStale(existing, file)) return null;
+
+        const caption = await generateAiCaption(fileId, settings, requestedLanguage);
+        await tauriEmit('ai-caption-updated', { fileId, caption });
+        return caption;
+      },
+      onProgress: (progress: CaptionBatchProgress) => {
+        captionBatchProgress.value = progress;
+      },
+    });
+    captionBatchProgress.value = result;
+
+    const messageParams = {
+      succeeded: result.succeeded.toLocaleString(),
+      skipped: result.skipped.toLocaleString(),
+      failed: result.failed.toLocaleString(),
+    };
+    if (result.cancelled) {
+      toast.warning(t('msgbox.caption_batch.cancelled', messageParams));
+    } else {
+      toast.success(t('msgbox.caption_batch.completed', messageParams));
+    }
+  } finally {
+    captionBatchRunning.value = false;
+    captionBatchCancelling.value = false;
+  }
+}
+
+function cancelCaptionBatch() {
+  if (!captionBatchRunning.value || captionBatchCancelRequested) return;
+  captionBatchCancelRequested = true;
+  captionBatchCancelling.value = true;
+}
+
+function closeCaptionBatchDialog() {
+  if (captionBatchRunning.value) {
+    cancelCaptionBatch();
+    return;
+  }
+  showCaptionBatchDialog.value = false;
 }
 
 async function getSelectedItemsForClipboard(limit = 10) {

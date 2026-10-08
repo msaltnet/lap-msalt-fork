@@ -700,6 +700,8 @@
       "open_video_in_app": "Ouvrir la vidéo dans {app}...",
       "open_selected_images_in_app": "Ouvrir les photos dans {app}...",
       "compare_selected_images": "Comparer",
+      "generate_ai_caption": "Générer une légende par IA",
+      "generate_ai_captions": "Générer des légendes par IA",
       "open_selected_videos_in_app": "Ouvrir les vidéos dans {app}...",
       "open_in_app": "Ouvrir dans une app externe...",
       "manage_app": "Gérer les apps...",
@@ -786,6 +788,18 @@
     "reset": "Réinitialiser",
     "cancel": "Annuler",
     "close": "Fermer",
+    "caption_batch": {
+      "title": "Générer des légendes par IA",
+      "progress": "{current} sur {total}",
+      "succeeded": "Générées",
+      "skipped": "Ignorées",
+      "failed": "Échecs",
+      "cancel": "Annuler",
+      "cancelling": "Annulation après la photo en cours...",
+      "close": "Fermer",
+      "completed": "{succeeded} générées, {skipped} ignorées, {failed} échecs.",
+      "cancelled": "Annulé : {succeeded} générées, {skipped} ignorées, {failed} échecs."
+    },
     "unsaved_changes": {
       "title": "Modifications non enregistrées",
       "message": "Vous avez des modifications non enregistrées. Voulez-vous les enregistrer ?"
@@ -1174,7 +1188,20 @@
     "geo_location": "Lieu",
     "tags": "Tags",
     "comment": "Commentaire",
-    "capture_settings": "Paramètres prise"
+    "capture_settings": "Paramètres prise",
+    "ai_caption": {
+      "title": "Légende par IA",
+      "generate": "Générer",
+      "regenerate": "Régénérer",
+      "delete": "Supprimer",
+      "generating": "Génération...",
+      "empty": "Aucune légende par IA n’a été générée.",
+      "outdated": "Le fichier source a été modifié après la génération de cette légende.",
+      "outdated_badge": "Obsolète",
+      "generated": "Légende par IA générée.",
+      "deleted": "Légende par IA supprimée.",
+      "metadata": "{model} · langue demandée : {language} · {time}"
+    }
   },
   "map": {
     "show_map": "Voir carte",
@@ -1650,6 +1677,17 @@
       "restore_restoring": "Restauration en cours...",
       "restore_success": "Restauration terminée. {count} bibliothèques restaurées : {names}",
       "restore_note": "Les bibliothèques dont le nom est en conflit seront renommées et les données existantes ne seront pas écrasées."
+    },
+    "ai_caption": {
+      "title": "Légendes par IA",
+      "enable": "Activer les légendes IA locales",
+      "enable_hint": "Générez des légendes avec un modèle de vision exécuté sur cet ordinateur.",
+      "endpoint": "Point de terminaison de l’API locale",
+      "model": "Modèle de vision",
+      "privacy_hint": "Seules les adresses localhost et de bouclage sont acceptées. Lap n’installe ni ne démarre le modèle.",
+      "test_connection": "Tester la connexion",
+      "testing": "Test en cours...",
+      "connection_success": "Connexion établie avec le modèle local de légendes IA."
     },
     "face_recognition": {
       "title": "Recherche de personnes",

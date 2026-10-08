@@ -700,6 +700,8 @@
       "open_video_in_app": "Video in {app} öffnen...",
       "open_selected_images_in_app": "Fotos in {app} öffnen...",
       "compare_selected_images": "Vergleichen",
+      "generate_ai_caption": "KI-Bildbeschreibung erstellen",
+      "generate_ai_captions": "KI-Bildbeschreibungen erstellen",
       "open_selected_videos_in_app": "Videos in {app} öffnen...",
       "open_in_app": "In externer App öffnen...",
       "manage_app": "Apps verwalten...",
@@ -786,6 +788,18 @@
     "reset": "Zurücksetzen",
     "cancel": "Abbrechen",
     "close": "Schließen",
+    "caption_batch": {
+      "title": "KI-Bildbeschreibungen erstellen",
+      "progress": "{current} von {total}",
+      "succeeded": "Erstellt",
+      "skipped": "Übersprungen",
+      "failed": "Fehlgeschlagen",
+      "cancel": "Abbrechen",
+      "cancelling": "Abbruch nach dem aktuellen Foto...",
+      "close": "Schließen",
+      "completed": "{succeeded} erstellt, {skipped} übersprungen, {failed} fehlgeschlagen.",
+      "cancelled": "Abgebrochen: {succeeded} erstellt, {skipped} übersprungen, {failed} fehlgeschlagen."
+    },
     "unsaved_changes": {
       "title": "Nicht gespeicherte Änderungen",
       "message": "Sie haben nicht gespeicherte Änderungen. Möchten Sie diese speichern?"
@@ -1174,7 +1188,20 @@
     "geo_location": "Ort",
     "tags": "Tags",
     "comment": "Kommentar",
-    "capture_settings": "Aufnahmeeinst."
+    "capture_settings": "Aufnahmeeinst.",
+    "ai_caption": {
+      "title": "KI-Bildbeschreibung",
+      "generate": "Erstellen",
+      "regenerate": "Neu erstellen",
+      "delete": "Löschen",
+      "generating": "Wird erstellt...",
+      "empty": "Es wurde noch keine KI-Bildbeschreibung erstellt.",
+      "outdated": "Die Quelldatei wurde nach dem Erstellen dieser Beschreibung geändert.",
+      "outdated_badge": "Veraltet",
+      "generated": "KI-Bildbeschreibung erstellt.",
+      "deleted": "KI-Bildbeschreibung gelöscht.",
+      "metadata": "{model} · angeforderte Sprache {language} · {time}"
+    }
   },
   "map": {
     "show_map": "Karte anzeigen",
@@ -1650,6 +1677,17 @@
       "restore_restoring": "Wiederherstellen...",
       "restore_success": "Wiederherstellung abgeschlossen. {count} Bibliotheken wiederhergestellt: {names}",
       "restore_note": "Bibliotheken mit Namenskonflikten werden umbenannt, vorhandene Daten werden nicht überschrieben."
+    },
+    "ai_caption": {
+      "title": "KI-Bildbeschreibungen",
+      "enable": "Lokale KI-Bildbeschreibungen aktivieren",
+      "enable_hint": "Erstellt Bildbeschreibungen mit einem Vision-Modell, das auf diesem Computer läuft.",
+      "endpoint": "Lokaler API-Endpunkt",
+      "model": "Vision-Modell",
+      "privacy_hint": "Nur localhost und Loopback-Adressen werden akzeptiert. Lap installiert oder startet das Modell nicht.",
+      "test_connection": "Verbindung testen",
+      "testing": "Verbindung wird getestet...",
+      "connection_success": "Mit dem lokalen KI-Modell für Bildbeschreibungen verbunden."
     },
     "face_recognition": {
       "title": "Personensuche",

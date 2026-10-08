@@ -414,6 +414,91 @@
         </Transition>
       </div>
 
+      <!-- AI Caption Section -->
+      <div v-if="canUseAiCaption" class="border-t border-base-content/5 px-1 py-4 space-y-3">
+        <div
+          class="flex items-center gap-1 cursor-pointer text-base-content/70 hover:text-base-content"
+          @click.stop="toggleAiCaption"
+        >
+          <IconRight
+            class="w-3 h-3 transition-transform duration-200"
+            :class="{ 'rotate-90': showAiCaptionPanel }"
+            @click.stop="toggleAiCaption"
+          />
+          <IconSparkles class="ml-0.5 w-3.5 h-3.5 text-primary/70" />
+          <span class="font-bold mr-auto uppercase text-xs tracking-wide text-base-content/30">
+            {{ $t('file_info.ai_caption.title') }}
+          </span>
+          <span
+            v-if="captionIsStale"
+            class="badge badge-warning badge-outline badge-xs"
+            :title="$t('file_info.ai_caption.outdated')"
+          >
+            {{ $t('file_info.ai_caption.outdated_badge') }}
+          </span>
+        </div>
+
+        <Transition
+          @before-enter="onBeforeEnter"
+          @enter="onEnter"
+          @after-enter="onAfterEnter"
+          @leave="onLeave"
+        >
+          <div v-if="showAiCaptionPanel" class="overflow-hidden">
+            <div class="pl-4 space-y-3">
+              <div v-if="isCaptionLoading" class="space-y-2 py-1">
+                <div class="skeleton h-3 w-full"></div>
+                <div class="skeleton h-3 w-4/5"></div>
+              </div>
+
+              <template v-else-if="aiCaption">
+                <p class="whitespace-pre-wrap wrap-break-words text-[12px] leading-5 text-base-content/80">
+                  {{ aiCaption.caption }}
+                </p>
+                <p class="text-[10px] leading-4 text-base-content/40">
+                  {{ $t('file_info.ai_caption.metadata', {
+                    model: aiCaption.model,
+                    language: aiCaption.requestedLanguage,
+                    time: formatRelativeTime(Number(aiCaption.generatedAt), $t),
+                  }) }}
+                </p>
+                <p v-if="captionIsStale" class="text-[11px] leading-4 text-warning">
+                  {{ $t('file_info.ai_caption.outdated') }}
+                </p>
+              </template>
+
+              <p v-else class="text-[12px] leading-5 text-base-content/45">
+                {{ $t('file_info.ai_caption.empty') }}
+              </p>
+
+              <div v-if="!isCaptionLoading" class="flex items-center gap-1">
+                <TButton
+                  :icon="IconSparkles"
+                  :text="isCaptionGenerating
+                    ? $t('file_info.ai_caption.generating')
+                    : $t(aiCaption ? 'file_info.ai_caption.regenerate' : 'file_info.ai_caption.generate')"
+                  :tooltip="$t(aiCaption ? 'file_info.ai_caption.regenerate' : 'file_info.ai_caption.generate')"
+                  :disabled="isCaptionGenerating"
+                  buttonSize="small"
+                  buttonClasses="px-2 w-auto flex-row gap-1"
+                  @click.stop="createCaption"
+                />
+                <TButton
+                  v-if="aiCaption"
+                  :icon="IconTrash"
+                  :text="$t('file_info.ai_caption.delete')"
+                  :tooltip="$t('file_info.ai_caption.delete')"
+                  :disabled="isCaptionGenerating"
+                  buttonSize="small"
+                  buttonClasses="px-2 w-auto flex-row gap-1 text-error"
+                  @click.stop="removeCaption"
+                />
+              </div>
+            </div>
+          </div>
+        </Transition>
+      </div>
+
       <!-- Map View -->
       <div v-if="fileInfo?.gps_latitude && fileInfo?.gps_longitude" 
         class="border-t border-base-content/5 px-1 py-4 space-y-3 flex flex-col transition-[flex-grow]" 
@@ -468,7 +553,21 @@ import { useUIStore } from '@/stores/uiStore';
 import { config, libConfig } from '@/common/config';
 import { isWebViewVideoPlaybackDisabled, getGStreamerAvailability } from '@/common/video';
 import { isOriginalUnavailable } from '@/common/availability';
-import { getTagsForFile, renameFile, editImage, getAlbum, getFileCollections, getFileInfo, getMotionPhotoVideoPath, revealPath, getFacesForFile, getPersonThumbnail } from '@/common/api';
+import {
+  deleteAiCaption,
+  generateAiCaption,
+  getAiCaption,
+  getTagsForFile,
+  renameFile,
+  editImage,
+  getAlbum,
+  getFileCollections,
+  getFileInfo,
+  getMotionPhotoVideoPath,
+  revealPath,
+  getFacesForFile,
+  getPersonThumbnail,
+} from '@/common/api';
 import { 
   extractFileName, 
   getFileExtension,
@@ -500,6 +599,8 @@ import {
   IconLivePhoto,
   IconBookmark,
   IconPerson,
+  IconSparkles,
+  IconTrash,
 } from '@/common/icons';
 import Breadcrumb from '@/components/Breadcrumb.vue';
 import TButton from '@/components/TButton.vue';
@@ -567,7 +668,22 @@ const previewScale = computed({
 });
 const showBasicInfoPanel = computed(() => config.infoPanel.showBasicInfo);
 const showMetadataPanel = computed(() => config.infoPanel.showMetadata);
+const showAiCaptionPanel = computed(() => config.infoPanel.showAiCaption);
 const showMapPanel = computed(() => config.infoPanel.showMap);
+const aiCaption = ref<any>(null);
+const isCaptionLoading = ref(false);
+const isCaptionGenerating = ref(false);
+let captionRequestSeq = 0;
+let unlistenAiCaptionUpdated: (() => void) | null = null;
+let captionListenerDisposed = false;
+const canUseAiCaption = computed(() => (
+  Boolean(config.settings.aiCaption?.enabled)
+  && [1, 3].includes(Number(props.fileInfo?.file_type || 0))
+));
+const captionIsStale = computed(() => (
+  aiCaption.value?.sourceModifiedAt != null
+  && Number(aiCaption.value.sourceModifiedAt) !== Number(props.fileInfo?.modified_at || 0)
+));
 const isVideoFile = computed(() => Number(props.fileInfo?.file_type || 0) === 2);
 const isLivePhoto = computed(() => (
   props.fileInfo?.media_subtype === 'live_photo' && !!props.fileInfo?.live_photo_video_path
@@ -755,6 +871,54 @@ watch(
 onBeforeUnmount(stopPreviewVideo);
 
 watch(
+  () => [props.fileInfo?.id, canUseAiCaption.value] as const,
+  async ([fileId, enabled]) => {
+    const requestSeq = ++captionRequestSeq;
+    aiCaption.value = null;
+    isCaptionLoading.value = false;
+    if (!enabled || !fileId) return;
+
+    isCaptionLoading.value = true;
+    try {
+      const value = await getAiCaption(Number(fileId));
+      if (requestSeq === captionRequestSeq && Number(props.fileInfo?.id) === Number(fileId)) {
+        aiCaption.value = value;
+      }
+    } catch (error: any) {
+      if (requestSeq === captionRequestSeq) {
+        toast.error(error?.message || String(error));
+      }
+    } finally {
+      if (requestSeq === captionRequestSeq) {
+        isCaptionLoading.value = false;
+      }
+    }
+  },
+  { immediate: true },
+);
+
+onMounted(async () => {
+  const unlisten = await listen('ai-caption-updated', (event: any) => {
+    const fileId = Number(event.payload?.fileId || 0);
+    if (fileId !== Number(props.fileInfo?.id || 0)) return;
+    captionRequestSeq += 1;
+    isCaptionLoading.value = false;
+    aiCaption.value = event.payload?.caption ?? null;
+  });
+  if (captionListenerDisposed) {
+    unlisten();
+  } else {
+    unlistenAiCaptionUpdated = unlisten;
+  }
+});
+
+onBeforeUnmount(() => {
+  captionListenerDisposed = true;
+  unlistenAiCaptionUpdated?.();
+  unlistenAiCaptionUpdated = null;
+});
+
+watch(
   () => [props.fileInfo?.id, Boolean(props.fileInfo?.has_collections), props.fileInfo?.collectionVersion] as const,
   async ([fileId, hasCollections]) => {
     const requestSeq = ++fileCollectionsRequestSeq;
@@ -789,8 +953,55 @@ function toggleMetadata() {
   config.infoPanel.showMetadata = !config.infoPanel.showMetadata;
 }
 
+function toggleAiCaption() {
+  config.infoPanel.showAiCaption = !config.infoPanel.showAiCaption;
+}
+
 function toggleMapPanel() {
   config.infoPanel.showMap = !config.infoPanel.showMap;
+}
+
+async function createCaption() {
+  const fileId = Number(props.fileInfo?.id || 0);
+  if (!fileId || isCaptionGenerating.value) return;
+
+  const requestSeq = ++captionRequestSeq;
+  isCaptionGenerating.value = true;
+  try {
+    const value = await generateAiCaption(
+      fileId,
+      { ...config.settings.aiCaption },
+      String(locale.value || 'en'),
+    );
+    if (requestSeq === captionRequestSeq && Number(props.fileInfo?.id) === fileId) {
+      aiCaption.value = value;
+      toast.success(t('file_info.ai_caption.generated'));
+    }
+  } catch (error: any) {
+    if (requestSeq === captionRequestSeq && Number(props.fileInfo?.id) === fileId) {
+      toast.error(error?.message || String(error));
+    }
+  } finally {
+    isCaptionGenerating.value = false;
+  }
+}
+
+async function removeCaption() {
+  const fileId = Number(props.fileInfo?.id || 0);
+  if (!fileId || isCaptionGenerating.value) return;
+
+  const requestSeq = ++captionRequestSeq;
+  try {
+    await deleteAiCaption(fileId);
+    if (requestSeq === captionRequestSeq && Number(props.fileInfo?.id) === fileId) {
+      aiCaption.value = null;
+      toast.success(t('file_info.ai_caption.deleted'));
+    }
+  } catch (error: any) {
+    if (requestSeq === captionRequestSeq && Number(props.fileInfo?.id) === fileId) {
+      toast.error(error?.message || String(error));
+    }
+  }
 }
 
 const quickSave = async (): Promise<boolean> => {

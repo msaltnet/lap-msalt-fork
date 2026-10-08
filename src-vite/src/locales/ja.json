@@ -700,6 +700,8 @@
       "open_video_in_app": "{app} で動画を開く...",
       "open_selected_images_in_app": "写真を {app} で開く...",
       "compare_selected_images": "比較",
+      "generate_ai_caption": "AIキャプションを生成",
+      "generate_ai_captions": "AIキャプションを一括生成",
       "open_selected_videos_in_app": "動画を {app} で開く...",
       "open_in_app": "外部アプリで開く...",
       "manage_app": "アプリを管理...",
@@ -786,6 +788,18 @@
     "reset": "リセット",
     "cancel": "キャンセル",
     "close": "閉じる",
+    "caption_batch": {
+      "title": "AIキャプションを一括生成",
+      "progress": "{total}件中{current}件",
+      "succeeded": "生成済み",
+      "skipped": "スキップ",
+      "failed": "失敗",
+      "cancel": "キャンセル",
+      "cancelling": "現在の写真の処理後にキャンセルします...",
+      "close": "閉じる",
+      "completed": "生成 {succeeded}件、スキップ {skipped}件、失敗 {failed}件。",
+      "cancelled": "キャンセル済み：生成 {succeeded}件、スキップ {skipped}件、失敗 {failed}件。"
+    },
     "unsaved_changes": {
       "title": "未保存の変更",
       "message": "未保存の変更があります。保存しますか？"
@@ -1174,7 +1188,20 @@
     "geo_location": "場所",
     "tags": "タグ",
     "comment": "コメント",
-    "capture_settings": "撮影設定"
+    "capture_settings": "撮影設定",
+    "ai_caption": {
+      "title": "AIキャプション",
+      "generate": "生成",
+      "regenerate": "再生成",
+      "delete": "削除",
+      "generating": "生成中...",
+      "empty": "AIキャプションはまだ生成されていません。",
+      "outdated": "このキャプションの生成後に元のファイルが変更されました。",
+      "outdated_badge": "古い",
+      "generated": "AIキャプションを生成しました。",
+      "deleted": "AIキャプションを削除しました。",
+      "metadata": "{model} · 指定言語 {language} · {time}"
+    }
   },
   "map": {
     "show_map": "地図を表示",
@@ -1650,6 +1677,17 @@
       "restore_restoring": "復元中...",
       "restore_success": "復元完了。{count} 個のライブラリを復元：{names}",
       "restore_note": "名前が重複するライブラリは名前が変更され、既存のデータは上書きされません。"
+    },
+    "ai_caption": {
+      "title": "AIキャプション",
+      "enable": "ローカルAIキャプションを有効にする",
+      "enable_hint": "このコンピューターで動作する画像認識モデルを使ってキャプションを生成します。",
+      "endpoint": "ローカルAPIエンドポイント",
+      "model": "画像認識モデル",
+      "privacy_hint": "localhostとループバックアドレスのみ使用できます。Lapはモデルのインストールや起動を行いません。",
+      "test_connection": "接続をテスト",
+      "testing": "テスト中...",
+      "connection_success": "ローカルAIキャプションモデルに接続しました。"
     },
     "face_recognition": {
       "title": "人物検索",

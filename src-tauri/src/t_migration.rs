@@ -158,6 +158,21 @@ fn get_migrations() -> Vec<Migration> {
             description: "Album scan scope and pixel filters",
             sql: "",
         },
+        Migration {
+            version: 19,
+            description: "Create local AI caption storage",
+            sql: "
+                CREATE TABLE IF NOT EXISTS ai_captions (
+                    file_id INTEGER PRIMARY KEY,
+                    caption TEXT NOT NULL,
+                    requested_language TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    source_modified_at INTEGER,
+                    generated_at INTEGER NOT NULL,
+                    FOREIGN KEY (file_id) REFERENCES afiles(id) ON DELETE CASCADE
+                );
+            ",
+        },
     ]
 }
 
@@ -562,5 +577,36 @@ mod album_filter_migration_tests {
         conn.execute_batch("PRAGMA user_version=17;").unwrap();
         check_and_migrate(&conn).unwrap();
         assert_eq!(conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0)).unwrap(),18);
+    }
+}
+
+#[cfg(test)]
+mod ai_caption_migration_tests {
+    use super::*;
+
+    #[test]
+    fn migrates_version_18_to_ai_captions_version_19() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "PRAGMA foreign_keys = ON;
+             PRAGMA user_version = 18;
+             CREATE TABLE afiles (id INTEGER PRIMARY KEY);",
+        )
+        .unwrap();
+
+        check_and_migrate(&conn).unwrap();
+
+        let version: i32 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        let table_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ai_captions'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, 19);
+        assert_eq!(table_count, 1);
     }
 }

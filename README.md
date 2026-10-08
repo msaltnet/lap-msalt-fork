@@ -63,12 +63,31 @@ brew install --cask lap
 - **Culling and comparison tools** including a four-pane image comparison viewer.
 - **Built-in editing** for crop, arbitrary-angle straighten, rotate, flip, resize, and basic image adjustments.
 - **Photo Collage** to compose selected photos into grid, justified-mosaic, or picture-pile layouts.
+- **Optional local AI captions** describe selected photos with a separately installed, OpenAI-compatible vision model and make those descriptions searchable in Lap.
 - **Apple Live Photos and Google Motion Photos** with motion playback and a unified Smart Album filter.
 - **RAW + JPEG/HEIC pairs** displayed as one item, with linked files kept together during file operations.
 - **Configurable RAW thumbnails and previews** using RAW rendering or the camera's embedded preview, with adjustable brightness and RAW+JPEG pair display.
 - **Interactive Map View** to explore geotagged photos and videos in clusters that follow your current filters.
 - **Offline album browsing** that keeps albums on disconnected or network storage visible with cached thumbnails.
 - **Broad format support** for 60+ photo, RAW, and video formats.
+
+### Optional local AI captions
+
+Lap can generate a one-sentence description for the current photo or a selected group of photos and RAW files. The feature is off by default and requires a separately installed OpenAI-compatible vision runtime, such as [Ollama](https://docs.ollama.com/api/openai-compatibility) or [LM Studio](https://lmstudio.ai/docs/developer/rest). Lap does not install, download, or start a caption model.
+
+For example, with Ollama:
+
+```bash
+ollama pull gemma3:4b
+ollama serve
+```
+
+Then open **Settings → Search → AI captions**, enable the feature, and set:
+
+- Endpoint: `http://127.0.0.1:11434/v1`
+- Model: `gemma3:4b`
+
+For privacy, Lap accepts caption endpoints on `localhost` or another loopback address only, bypasses system proxies, and does not follow redirects. A resized preview is sent only to the local runtime when you explicitly generate a caption; there is no automatic whole-library captioning. Generated captions stay in Lap's local database, appear in unified text search, and are not embedded in the original file or written to a sidecar.
 
 ## Metadata, Collections, and Moving Files
 
@@ -87,7 +106,7 @@ The following are Lap library data. They are stored in Lap's local database or l
 
 - Collections, Tags, Comments, Favorites, Ratings, and Culling states (including Picks and Rejects)
 - Smart Albums and their rules, grouping, sorting, and ordering
-- AI search data, face data, thumbnails, and other index/cache data
+- AI captions, AI search data, face data, thumbnails, and other index/cache data
 
 This data does not travel with a file when it is copied, exported, or moved outside Lap, and it is not available automatically to other applications.
 

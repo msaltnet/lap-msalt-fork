@@ -29,6 +29,7 @@ import {
   IconSplitOn,
   IconSplitOn4,
   IconCollage,
+  IconSparkles,
 } from '@/common/icons';
 
 const OPEN_IN_APP_LABELS = {
@@ -48,6 +49,7 @@ export const useFileMenuItems = (
     selectionMediaKind?: Ref<'image' | 'video' | 'mixed' | 'empty'>;
     selectionCount?: Ref<number>;
     selectionHasUnavailable?: Ref<boolean>;
+    selectionHasImages?: Ref<boolean>;
   }
 ) => {
   const createAction = (actionName: string) => Object.assign(() => {
@@ -95,6 +97,13 @@ export const useFileMenuItems = (
         action: createAction('compare-selected-images'),
       },
       {
+        label: String(localeMsg.value.menu.file.generate_ai_captions || 'Generate AI captions'),
+        icon: markRaw(IconSparkles),
+        hidden: !config.settings.aiCaption?.enabled,
+        disabled: !options?.selectionHasImages?.value,
+        action: createAction('generate-ai-captions'),
+      },
+      {
         label: String(localeMsg.value.menu.file.create_montage || 'Create montage'),
         icon: markRaw(IconCollage),
         disabled: unavailable || selectionCount < 2,
@@ -108,6 +117,13 @@ export const useFileMenuItems = (
         icon: markRaw(IconRefresh),
         disabled: unavailable || selectionCount === 0,
         action: createAction('refresh-file-info'),
+      },
+      {
+        label: openInAppLabel(kind, selectionCount, true),
+        icon: markRaw(IconExternal),
+        disabled: kind === 'empty' || selectionIsMixed || !appPath,
+        shortcut: shortcut('file.openExternalApp'),
+        action: createAction('open-external-app'),
       },
     ];
   };
@@ -146,6 +162,13 @@ export const useFileMenuItems = (
         icon: markRaw(IconPrint),
         disabled: !isImage,
         action: createAction('print')
+      },
+      {
+        label: String(localeMsg.value.menu.file.generate_ai_caption || 'Generate AI caption'),
+        icon: markRaw(IconSparkles),
+        hidden: !config.settings.aiCaption?.enabled,
+        disabled: !isImage,
+        action: createAction('generate-ai-captions'),
       },
       { label: "-", action: null },
       {

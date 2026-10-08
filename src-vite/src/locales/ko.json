@@ -700,6 +700,8 @@
       "open_video_in_app": "{app}에서 동영상 열기...",
       "open_selected_images_in_app": "{app}에서 사진 열기...",
       "compare_selected_images": "비교",
+      "generate_ai_caption": "AI 캡션 생성",
+      "generate_ai_captions": "AI 캡션 일괄 생성",
       "open_selected_videos_in_app": "{app}에서 동영상 열기...",
       "open_in_app": "외부 앱에서 열기...",
       "manage_app": "앱 관리...",
@@ -786,6 +788,18 @@
     "reset": "초기화",
     "cancel": "취소",
     "close": "닫기",
+    "caption_batch": {
+      "title": "AI 캡션 일괄 생성",
+      "progress": "{total}개 중 {current}개",
+      "succeeded": "생성",
+      "skipped": "건너뜀",
+      "failed": "실패",
+      "cancel": "취소",
+      "cancelling": "현재 사진을 처리한 후 취소합니다...",
+      "close": "닫기",
+      "completed": "생성 {succeeded}개, 건너뜀 {skipped}개, 실패 {failed}개.",
+      "cancelled": "취소됨: 생성 {succeeded}개, 건너뜀 {skipped}개, 실패 {failed}개."
+    },
     "unsaved_changes": {
       "title": "저장되지 않은 변경 사항",
       "message": "저장되지 않은 변경 사항이 있습니다. 저장하시겠습니까?"
@@ -1174,7 +1188,20 @@
     "geo_location": "위치",
     "tags": "태그",
     "comment": "메모",
-    "capture_settings": "촬영 설정"
+    "capture_settings": "촬영 설정",
+    "ai_caption": {
+      "title": "AI 캡션",
+      "generate": "생성",
+      "regenerate": "다시 생성",
+      "delete": "삭제",
+      "generating": "생성 중...",
+      "empty": "생성된 AI 캡션이 없습니다.",
+      "outdated": "캡션을 생성한 후 원본 파일이 변경되었습니다.",
+      "outdated_badge": "오래됨",
+      "generated": "AI 캡션을 생성했습니다.",
+      "deleted": "AI 캡션을 삭제했습니다.",
+      "metadata": "{model} · 요청 언어 {language} · {time}"
+    }
   },
   "map": {
     "show_map": "지도 보기",
@@ -1650,6 +1677,17 @@
       "restore_restoring": "복원 중...",
       "restore_success": "복원 완료. {count}개 라이브러리 복원됨: {names}",
       "restore_note": "이름이 충돌하는 라이브러리는 이름이 변경되며 기존 데이터는 덮어쓰지 않습니다."
+    },
+    "ai_caption": {
+      "title": "AI 캡션",
+      "enable": "로컬 AI 캡션 활성화",
+      "enable_hint": "이 컴퓨터에서 실행되는 비전 모델로 사진 설명을 생성합니다.",
+      "endpoint": "로컬 API 엔드포인트",
+      "model": "비전 모델",
+      "privacy_hint": "localhost와 루프백 주소만 허용됩니다. Lap은 모델을 설치하거나 실행하지 않습니다.",
+      "test_connection": "연결 테스트",
+      "testing": "테스트 중...",
+      "connection_success": "로컬 AI 캡션 모델에 연결되었습니다."
     },
     "face_recognition": {
       "title": "인물 검색",

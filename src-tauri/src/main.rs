@@ -16,6 +16,7 @@ use tauri_plugin_aptabase::EventTracker;
 mod t_ai;
 mod t_ai_png;
 mod t_apple_sidecar;
+mod t_caption;
 mod t_cluster;
 mod t_cmds;
 mod t_common;
@@ -383,6 +384,10 @@ async fn main() {
             t_cmds::cancel_multilingual_image_search_model_download,
             t_cmds::generate_embedding,
             t_cmds::search_similar_images,
+            t_cmds::test_ai_caption_provider,
+            t_cmds::get_ai_caption,
+            t_cmds::generate_ai_caption,
+            t_cmds::delete_ai_caption,
             // person (face recognition)
             t_cmds::index_faces,
             t_cmds::cancel_face_index,

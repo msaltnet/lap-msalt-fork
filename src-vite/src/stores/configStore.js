@@ -47,6 +47,7 @@ export const useConfigStore = defineStore('configStore', {
       histogramChannels: 15,     // histogram channel mask (L=1, R=2, G=4, B=8; 0=none, 15=all)
       showBasicInfo: true,       // show basic info
       showMetadata: true,        // show metadata
+      showAiCaption: true,       // show AI caption
       showMap: true,             // show map
       mapTheme: 0,               // 0: standard, 2: satellite
     },
@@ -181,6 +182,13 @@ export const useConfigStore = defineStore('configStore', {
       // similar photos settings
       similarPhotos: {
         groupingThresholdIndex: 1, // default: Strict
+      },
+
+      // local AI caption settings
+      aiCaption: {
+        enabled: false,
+        endpoint: 'http://127.0.0.1:11434/v1',
+        model: '',
       },
       
       // face recognition settings

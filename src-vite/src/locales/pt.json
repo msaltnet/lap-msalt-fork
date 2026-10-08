@@ -700,6 +700,8 @@
       "open_video_in_app": "Abrir vídeo em {app}...",
       "open_selected_images_in_app": "Abrir fotos em {app}...",
       "compare_selected_images": "Comparar",
+      "generate_ai_caption": "Gerar legenda por IA",
+      "generate_ai_captions": "Gerar legendas por IA",
       "open_selected_videos_in_app": "Abrir vídeos em {app}...",
       "open_in_app": "Abrir em app externo...",
       "manage_app": "Gerenciar apps...",
@@ -786,6 +788,18 @@
     "reset": "Redefinir",
     "cancel": "Cancelar",
     "close": "Fechar",
+    "caption_batch": {
+      "title": "Gerar legendas por IA",
+      "progress": "{current} de {total}",
+      "succeeded": "Geradas",
+      "skipped": "Ignoradas",
+      "failed": "Falhas",
+      "cancel": "Cancelar",
+      "cancelling": "Cancelando após a foto atual...",
+      "close": "Fechar",
+      "completed": "{succeeded} geradas, {skipped} ignoradas, {failed} falhas.",
+      "cancelled": "Cancelado: {succeeded} geradas, {skipped} ignoradas, {failed} falhas."
+    },
     "unsaved_changes": {
       "title": "Alterações não salvas",
       "message": "Você tem alterações não salvas. Deseja salvá-las?"
@@ -1174,7 +1188,20 @@
     "geo_location": "Local",
     "tags": "Tags",
     "comment": "Comentário",
-    "capture_settings": "Config. captura"
+    "capture_settings": "Config. captura",
+    "ai_caption": {
+      "title": "Legenda por IA",
+      "generate": "Gerar",
+      "regenerate": "Gerar novamente",
+      "delete": "Excluir",
+      "generating": "Gerando...",
+      "empty": "Nenhuma legenda por IA foi gerada.",
+      "outdated": "O arquivo original foi alterado após a geração desta legenda.",
+      "outdated_badge": "Desatualizada",
+      "generated": "Legenda por IA gerada.",
+      "deleted": "Legenda por IA excluída.",
+      "metadata": "{model} · idioma solicitado: {language} · {time}"
+    }
   },
   "map": {
     "show_map": "Mostrar mapa",
@@ -1650,6 +1677,17 @@
       "restore_restoring": "Restaurando...",
       "restore_success": "Restauração concluída. {count} bibliotecas restauradas: {names}",
       "restore_note": "Bibliotecas com nomes conflitantes serão renomeadas e os dados existentes não serão sobrescritos."
+    },
+    "ai_caption": {
+      "title": "Legendas por IA",
+      "enable": "Ativar legendas locais por IA",
+      "enable_hint": "Gere legendas com um modelo de visão em execução neste computador.",
+      "endpoint": "Endpoint da API local",
+      "model": "Modelo de visão",
+      "privacy_hint": "Apenas localhost e endereços de loopback são aceitos. O Lap não instala nem inicia o modelo.",
+      "test_connection": "Testar conexão",
+      "testing": "Testando...",
+      "connection_success": "Conectado ao modelo local de legendas por IA."
     },
     "face_recognition": {
       "title": "Pesquisa de pessoas",
