@@ -4649,7 +4649,7 @@ impl AFile {
         }
 
         if let Some((condition, values)) =
-            lap_core::t_caption::literal_search_condition(&params.search_file_name)
+            crate::t_caption::literal_search_condition(&params.search_file_name)
         {
             conditions.push(condition);
             for value in values {
@@ -10134,7 +10134,7 @@ fn create_db_internal() -> Result<(), String> {
     .map_err(|e| e.to_string())?;
 
     // Run schema migrations after base tables are ensured.
-    lap_core::t_migration::check_and_migrate(&conn)?;
+    crate::t_migration::check_and_migrate(&conn)?;
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_afiles_content_identifier ON afiles(content_identifier)",
         [],

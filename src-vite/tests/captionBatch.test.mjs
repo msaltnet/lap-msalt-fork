@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   confirmCaptionBatchStart,
   eligibleCaptionFiles,
+  isCaptionStale,
   runCaptionBatch,
 } from '../src/common/captionBatch.js';
 
@@ -44,6 +45,20 @@ test('confirmCaptionBatchStart starts small batches without a prompt', async () 
 
   assert.equal(confirmed, true);
   assert.equal(promptCalls, 0);
+});
+
+test('isCaptionStale detects captions made before the file changed', () => {
+  assert.equal(
+    isCaptionStale({ sourceModifiedAt: 100 }, { modified_at: 100 }),
+    false,
+  );
+  assert.equal(
+    isCaptionStale({ sourceModifiedAt: 100 }, { modified_at: 200 }),
+    true,
+  );
+  assert.equal(isCaptionStale({ sourceModifiedAt: null }, { modified_at: 200 }), false);
+  assert.equal(isCaptionStale(null, { modified_at: 200 }), false);
+  assert.equal(isCaptionStale(undefined, { modified_at: 200 }), false);
 });
 
 test('runCaptionBatch counts saved, skipped, and failed files', async () => {

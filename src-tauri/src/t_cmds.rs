@@ -3202,13 +3202,13 @@ pub async fn search_similar_images(
 
 #[tauri::command]
 pub async fn test_ai_caption_provider(endpoint: String, model: String) -> Result<(), String> {
-    lap_core::t_caption::test_provider(&endpoint, &model).await
+    crate::t_caption::test_provider(&endpoint, &model).await
 }
 
 #[tauri::command]
-pub fn get_ai_caption(file_id: i64) -> Result<Option<lap_core::t_caption::AiCaption>, String> {
+pub fn get_ai_caption(file_id: i64) -> Result<Option<crate::t_caption::AiCaption>, String> {
     let conn = crate::t_sqlite::open_conn()?;
-    lap_core::t_caption::fetch(&conn, file_id)
+    crate::t_caption::fetch(&conn, file_id)
 }
 
 #[tauri::command]
@@ -3217,13 +3217,13 @@ pub async fn generate_ai_caption(
     endpoint: String,
     model: String,
     requested_language: String,
-) -> Result<lap_core::t_caption::AiCaption, String> {
+) -> Result<crate::t_caption::AiCaption, String> {
     let file = AFile::get_file_info(file_id)?.ok_or_else(|| "File not found".to_string())?;
     if !matches!(file.file_type, Some(1) | Some(3)) {
         return Err("AI captions support images and RAW files only".to_string());
     }
     let image_data = AThumb::get_or_create_caption_bytes(&file)?;
-    let caption = lap_core::t_caption::generate(
+    let caption = crate::t_caption::generate(
         file_id,
         file.modified_at,
         &endpoint,
@@ -3233,14 +3233,14 @@ pub async fn generate_ai_caption(
     )
     .await?;
     let conn = crate::t_sqlite::open_conn()?;
-    lap_core::t_caption::upsert(&conn, &caption)?;
+    crate::t_caption::upsert(&conn, &caption)?;
     Ok(caption)
 }
 
 #[tauri::command]
 pub fn delete_ai_caption(file_id: i64) -> Result<bool, String> {
     let conn = crate::t_sqlite::open_conn()?;
-    lap_core::t_caption::delete(&conn, file_id)
+    crate::t_caption::delete(&conn, file_id)
 }
 
 #[tauri::command]

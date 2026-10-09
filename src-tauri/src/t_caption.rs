@@ -16,15 +16,26 @@ pub fn literal_search_condition(search_term: &str) -> Option<(String, Vec<String
         return None;
     }
 
-    let condition = "(a.name LIKE ? COLLATE NOCASE
-        OR a.comments LIKE ? COLLATE NOCASE
+    let condition = "(a.name LIKE (? COLLATE NOCASE) ESCAPE '\\'
+        OR a.comments LIKE (? COLLATE NOCASE) ESCAPE '\\'
         OR EXISTS (
             SELECT 1 FROM ai_captions ac
-            WHERE ac.file_id = a.id AND ac.caption LIKE ? COLLATE NOCASE
+            WHERE ac.file_id = a.id AND ac.caption LIKE (? COLLATE NOCASE) ESCAPE '\\'
         ))"
     .to_string();
-    let pattern = format!("%{search_term}%");
+    let pattern = format!("%{}%", escape_like_literal(search_term));
     Some((condition, vec![pattern; 3]))
+}
+
+fn escape_like_literal(term: &str) -> String {
+    let mut escaped = String::with_capacity(term.len());
+    for character in term.chars() {
+        if matches!(character, '\\' | '%' | '_') {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    escaped
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -110,10 +121,30 @@ fn normalize_caption(raw: &str) -> Result<String, String> {
     Ok(value)
 }
 
+fn language_name(code: &str) -> &'static str {
+    match code.trim().to_ascii_lowercase().as_str() {
+        "de" => "German",
+        "es" => "Spanish",
+        "fr" => "French",
+        "hu" => "Hungarian",
+        "it" => "Italian",
+        "ja" => "Japanese",
+        "ko" => "Korean",
+        "nl" => "Dutch",
+        "pl" => "Polish",
+        "pt" => "Portuguese",
+        "ru" => "Russian",
+        "uk" => "Ukrainian",
+        "zh-cn" | "zh" => "Chinese (Simplified)",
+        "zh-tw" => "Chinese (Traditional)",
+        _ => "English",
+    }
+}
+
 fn build_caption_request(model: &str, language: &str, image_url: &str) -> Value {
     let prompt = format!(
         "Describe only what is visibly present in this photo in exactly one concise sentence. \
-         Do not speculate and do not use an introductory phrase. Respond in {language} when supported; otherwise respond in English."
+         Do not speculate and do not use an introductory phrase. Respond in {language}."
     );
     json!({
         "model": model,
@@ -215,7 +246,7 @@ pub async fn generate(
     let mime = image_mime(image_data)?;
     let encoded = base64::engine::general_purpose::STANDARD.encode(image_data);
     let image_url = format!("data:{mime};base64,{encoded}");
-    let caption = request_caption(endpoint, model, language, &image_url).await?;
+    let caption = request_caption(endpoint, model, language_name(language), &image_url).await?;
 
     Ok(AiCaption {
         file_id,
@@ -425,6 +456,17 @@ mod tests {
     }
 
     #[test]
+    fn maps_locale_codes_to_language_names() {
+        assert_eq!(language_name("ko"), "Korean");
+        assert_eq!(language_name("ja"), "Japanese");
+        assert_eq!(language_name("zh-CN"), "Chinese (Simplified)");
+        assert_eq!(language_name("zh-TW"), "Chinese (Traditional)");
+        assert_eq!(language_name("pt"), "Portuguese");
+        assert_eq!(language_name(""), "English");
+        assert_eq!(language_name("xx-unknown"), "English");
+    }
+
+    #[test]
     fn serializes_openai_vision_message() {
         let body = build_caption_request("gemma3:4b", "ko", "data:image/jpeg;base64,YWJj");
         assert_eq!(body["model"], "gemma3:4b");
@@ -433,6 +475,37 @@ mod tests {
             body["messages"][0]["content"][1]["image_url"]["url"],
             "data:image/jpeg;base64,YWJj"
         );
+    }
+
+    #[test]
+    fn literal_search_treats_wildcards_as_literal_text() {
+        let conn = fixture();
+        for (id, name) in [
+            (9, "report_100%.txt"),
+            (10, "report_100X.txt"),
+            (11, "notes_100_.md"),
+        ] {
+            conn.execute(
+                "INSERT INTO afiles(id, name) VALUES (?1, ?2)",
+                rusqlite::params![id, name],
+            )
+            .unwrap();
+        }
+
+        let search = |term: &str| -> Vec<i64> {
+            let (condition, values) = literal_search_condition(term).unwrap();
+            let query = format!("SELECT a.id FROM afiles a WHERE {condition} ORDER BY a.id");
+            conn.prepare(&query)
+                .unwrap()
+                .query_map(rusqlite::params_from_iter(values), |row| row.get(0))
+                .unwrap()
+                .map(|row| row.unwrap())
+                .collect()
+        };
+
+        // "%" and "_" match literally instead of acting as wildcards.
+        assert_eq!(search("100%"), vec![9]);
+        assert_eq!(search("100_"), vec![11]);
     }
 
     #[test]
